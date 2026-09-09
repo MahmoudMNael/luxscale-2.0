@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>LuxScale demo</title>
+  <link rel="stylesheet" href="demo.css" />
+</head>
+<body>
+  <header class="top">
+    <div>
+      <h1>LuxScale</h1>
+      <p class="muted">Illuminance demo — floor plan, fixtures, every returned matrix</p>
+    </div>
+    <a class="docs" href="/docs" target="_blank" rel="noreferrer">OpenAPI</a>
+  </header>
+
+  <main class="layout">
+    <form id="form" class="panel">
+      <h2>Inputs</h2>
+
+      <label>Room height (m)
+        <input id="height" type="number" min="0.01" step="0.01" value="3" required />
+      </label>
+
+      <fieldset>
+        <legend>Fixture grid X</legend>
+        <label>Spacing <input id="xSpacing" type="number" min="0.01" step="0.01" value="2" required /></label>
+        <label>Offset beginning <input id="xOffB" type="number" min="0" step="0.01" value="1" required /></label>
+        <label>Offset ending <input id="xOffE" type="number" min="0" step="0.01" value="1" required /></label>
+      </fieldset>
+
+      <fieldset>
+        <legend>Fixture grid Y</legend>
+        <label>Spacing <input id="ySpacing" type="number" min="0.01" step="0.01" value="2" required /></label>
+        <label>Offset beginning <input id="yOffB" type="number" min="0" step="0.01" value="1" required /></label>
+        <label>Offset ending <input id="yOffE" type="number" min="0" step="0.01" value="1" required /></label>
+      </fieldset>
+
+      <label>IES file
+        <input id="iesFile" type="file" accept=".ies,.txt,text/plain" />
+        <span class="hint">Leave empty to use <code>sample.ies</code></span>
+      </label>
+
+      <div class="row">
+        <span>Polygon (m)</span>
+        <button type="button" id="presetRect" class="ghost">8×6 rect</button>
+        <button type="button" id="presetL" class="ghost">L-shape</button>
+      </div>
+      <table id="verts">
+        <thead><tr><th>x</th><th>y</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <button type="button" id="addVert" class="ghost">Add vertex</button>
+      <canvas id="polyPreview" width="280" height="200" aria-label="Polygon preview"></canvas>
+      <p id="polyMeta" class="hint"></p>
+
+      <button type="submit" id="run">Calculate</button>
+      <p id="status" class="status" hidden></p>
+    </form>
+
+    <section class="results">
+      <div class="toolbar">
+        <label>Floor layer
+          <select id="floorLayer" disabled></select>
+        </label>
+        <div id="stats" class="stats muted">No run yet</div>
+      </div>
+      <div class="view">
+        <canvas id="plan" width="720" height="520"></canvas>
+        <aside class="legend">
+          <div id="legendBar"></div>
+          <div class="legend-ends"><span id="legMin">0</span><span>lux</span><span id="legMax">0</span></div>
+          <p class="hint">Squares = floor patches. Amber = fixtures at mounting height.</p>
+        </aside>
+      </div>
+
+      <h2>Walls</h2>
+      <div id="walls" class="walls"></div>
+
+      <h2>Matrices</h2>
+      <div id="matrices"></div>
+    </section>
+  </main>
+  <script src="demo.js"></script>
+</body>
+</html>

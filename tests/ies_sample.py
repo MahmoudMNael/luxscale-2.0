@@ -1,0 +1,11 @@
+"""Type-C IES with one horizontal angle (rotationally symmetric)."""
+
+SAMPLE_IES = """IESNA:LM-63-2002
+[TEST] luxscale synthetic
+TILT=NONE
+1 1000 1 5 1 1 2 0 0 0
+1 1 1
+0 45 90 135 180
+0
+1000 700 300 40 0
+"""
