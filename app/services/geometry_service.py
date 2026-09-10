@@ -6,6 +6,7 @@ from app.services.vector_math import (
     EPS,
     centroid_2d,
     clip_rect_to_polygon,
+    inset_rings,
     norm,
     polygon_area,
     signed_area,
@@ -65,37 +66,44 @@ def generate_patches(
     edge_handling: str = "shrink",
     *,
     plane_z: float,
+    border: float = 0.0,
 ) -> list[Patch]:
     size = 1.0 if patch_size is None else patch_size
     if isinstance(surface, FloorSurface):
-        return _floor_patches(surface, size, edge_handling, plane_z)
+        return _floor_patches(surface, size, edge_handling, plane_z, border)
     return _wall_patches(surface, size, edge_handling)
 
 
-def _floor_patches(surface: FloorSurface, size: float, edge_handling: str, plane_z: float) -> list[Patch]:
-    xs = [p[0] for p in surface.polygon]
-    ys = [p[1] for p in surface.polygon]
+def _floor_patches(
+    surface: FloorSurface, size: float, edge_handling: str, plane_z: float, border: float
+) -> list[Patch]:
+    domains = inset_rings(surface.polygon, border)
+    if not domains:
+        return []
+    xs = [p[0] for ring in domains for p in ring]
+    ys = [p[1] for ring in domains for p in ring]
     patches: list[Patch] = []
     n = 0
     for y0, y1 in _segments(min(ys), max(ys), size, edge_handling):
         for x0, x1 in _segments(min(xs), max(xs), size, edge_handling):
-            for ring in clip_rect_to_polygon((x0, y0, x1, y1), surface.polygon):
-                area = polygon_area(ring)
-                if area <= EPS:
-                    continue
-                cx, cy = centroid_2d(ring)
-                patches.append(
-                    Patch(
-                        id=f"floor-{n}",
-                        surface_type="floor",
-                        parent_id="floor",
-                        center=(cx, cy, plane_z),
-                        normal=(0.0, 0.0, 1.0),
-                        area=area,
-                        size=size,
+            for domain in domains:
+                for ring in clip_rect_to_polygon((x0, y0, x1, y1), domain):
+                    area = polygon_area(ring)
+                    if area <= EPS:
+                        continue
+                    cx, cy = centroid_2d(ring)
+                    patches.append(
+                        Patch(
+                            id=f"floor-{n}",
+                            surface_type="floor",
+                            parent_id="floor",
+                            center=(cx, cy, plane_z),
+                            normal=(0.0, 0.0, 1.0),
+                            area=area,
+                            size=size,
+                        )
                     )
-                )
-                n += 1
+                    n += 1
     return patches
 
 

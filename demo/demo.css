@@ -69,7 +69,10 @@ td input { width: 100%; }
 
 .results { padding: 1rem 1.4rem 2rem; overflow: auto; }
 .toolbar { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; }
-.stats { font-variant-numeric: tabular-nums; }
+.toolbar.compare { align-items: flex-end; margin: 0.4rem 0 0.8rem; }
+.toolbar.compare fieldset { min-width: 140px; }
+.toolbar.compare input { width: 5.5rem; }
+.stats { font-variant-numeric: tabular-nums; flex: 1 1 16rem; }
 .view { display: grid; grid-template-columns: 1fr 140px; gap: 1rem; align-items: start; }
 canvas { background: #0c0e14; border: 1px solid var(--line); width: 100%; height: auto; }
 

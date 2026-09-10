@@ -30,6 +30,12 @@ def test_pipeline_floor_lux_and_maintenance_metadata():
     assert fixture.height == 0
     assert result.floorPatches
     assert all(p.center.z == WORK_PLANE_HEIGHT for p in result.floorPatches)
+    xs = [p.center.x for p in result.floorPatches]
+    ys = [p.center.y for p in result.floorPatches]
+    assert min(xs) == pytest.approx(0.75)
+    assert max(xs) == pytest.approx(3.25)
+    assert min(ys) == pytest.approx(0.75)
+    assert max(ys) == pytest.approx(3.25)
     total = result.totalFloorIlluminance.values
     assert total
     assert max(total) > 0

@@ -30,6 +30,8 @@ const els = {
   matrices: document.getElementById("matrices"),
   legMin: document.getElementById("legMin"),
   legMax: document.getElementById("legMax"),
+  wallMargin: document.getElementById("wallMargin"),
+  dialuxNearest: document.getElementById("dialuxNearest"),
 };
 
 let vertices = PRESETS.rect.map(([x, y]) => ({ x, y }));
@@ -51,6 +53,88 @@ function signedArea(pts) {
 }
 
 const EPS = 1e-9;
+
+function distToSegment(p, a, b) {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const len2 = dx * dx + dy * dy;
+  if (len2 < EPS * EPS) return Math.hypot(p.x - a.x, p.y - a.y);
+  let t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
+}
+
+function distToPolygon(p, poly) {
+  let d = Infinity;
+  for (let i = 0; i < poly.length; i++) {
+    d = Math.min(d, distToSegment(p, poly[i], poly[(i + 1) % poly.length]));
+  }
+  return d;
+}
+
+function wallMargin() {
+  const v = Number(els.wallMargin.value);
+  return Number.isFinite(v) && v > 0 ? v : 0;
+}
+
+function keptFloorIndices(patches) {
+  const m = wallMargin();
+  if (!(m > 0)) return patches.map((_, i) => i);
+  const out = [];
+  patches.forEach((p, i) => {
+    if (distToPolygon(p.center, vertices) >= m - EPS) out.push(i);
+  });
+  return out;
+}
+
+function layerStats(values, indices) {
+  if (!indices.length) return { min: 0, max: 0, avg: 0, minI: -1, maxI: -1, kept: 0 };
+  let min = Infinity;
+  let max = -Infinity;
+  let sum = 0;
+  let minI = indices[0];
+  let maxI = indices[0];
+  for (const i of indices) {
+    const v = values[i];
+    sum += v;
+    if (v < min) {
+      min = v;
+      minI = i;
+    }
+    if (v > max) {
+      max = v;
+      maxI = i;
+    }
+  }
+  return { min, max, avg: sum / indices.length, minI, maxI, kept: indices.length };
+}
+
+function parseXY(xid, yid) {
+  const xs = document.getElementById(xid).value;
+  const ys = document.getElementById(yid).value;
+  if (xs === "" || ys === "") return null;
+  const x = Number(xs);
+  const y = Number(ys);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+  return { x, y };
+}
+
+function nearestPatch(pt, patches) {
+  let iBest = 0;
+  let dBest = Infinity;
+  patches.forEach((p, i) => {
+    const d = Math.hypot(p.center.x - pt.x, p.center.y - pt.y);
+    if (d < dBest) {
+      dBest = d;
+      iBest = i;
+    }
+  });
+  return { i: iBest, d: dBest };
+}
+
+function fmtXY(p) {
+  return `(${p.x.toFixed(2)}, ${p.y.toFixed(2)})`;
+}
 
 function onSegment(p, a, b) {
   const cross = (p.x - a.x) * (b.y - a.y) - (p.y - a.y) * (b.x - a.x);
@@ -258,7 +342,7 @@ function stats(values) {
   return { min, max, avg };
 }
 
-function drawPlan(layer) {
+function drawPlan(layer, s, kept) {
   const canvas = els.plan;
   const ctx = canvas.getContext("2d");
   ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -266,16 +350,20 @@ function drawPlan(layer) {
   const extra = result.fixtures.flatMap((f) => [f.position, ...(f.corners || []), ...(f.elements || [])]);
   const b = boundsOf([...pts, ...extra, ...vertices]);
   const to = mapper(canvas, b);
-  const { min, max } = stats(layer.values);
-  els.legMin.textContent = min.toFixed(1);
-  els.legMax.textContent = max.toFixed(1);
-  const span = max - min || 1;
+  els.legMin.textContent = s.kept ? s.min.toFixed(1) : "—";
+  els.legMax.textContent = s.kept ? s.max.toFixed(1) : "—";
+  const span = s.max - s.min || 1;
+  const keptSet = new Set(kept);
 
   result.floorPatches.forEach((p, i) => {
     const half = p.size / 2;
     const a = to(p.center.x - half, p.center.y - half);
     const c = to(p.center.x + half, p.center.y + half);
-    ctx.fillStyle = luxColor((layer.values[i] - min) / span);
+    if (keptSet.has(i) && s.kept) {
+      ctx.fillStyle = luxColor((layer.values[i] - s.min) / span);
+    } else {
+      ctx.fillStyle = "rgba(232, 237, 247, 0.06)";
+    }
     ctx.fillRect(a.x, c.y, c.x - a.x, a.y - c.y);
   });
 
@@ -323,6 +411,18 @@ function drawPlan(layer) {
       p.y - 6
     );
   });
+
+  function ring(i, color) {
+    if (i < 0) return;
+    const q = to(result.floorPatches[i].center.x, result.floorPatches[i].center.y);
+    ctx.beginPath();
+    ctx.arc(q.x, q.y, 7, 0, Math.PI * 2);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+  ring(s.minI, "#3d8bfd");
+  ring(s.maxI, "#fff7cc");
 }
 
 function drawWall(canvas, patches, values) {
@@ -388,11 +488,37 @@ function rebuildLayers() {
   els.floorLayer.disabled = false;
 }
 
+function dialuxCompare(values) {
+  const patches = result.floorPatches;
+  const parts = [];
+  function one(label, xid, yid) {
+    const pt = parseXY(xid, yid);
+    if (!pt) return;
+    const { i, d } = nearestPatch(pt, patches);
+    const p = patches[i];
+    parts.push(
+      `${label} ${fmtXY(pt)} → ${p.id} ${fmtXY(p.center)} ${values[i].toFixed(1)} lux · Δ ${d.toFixed(3)} m`
+    );
+  }
+  one("Dialux min", "dxMinX", "dxMinY");
+  one("Dialux max", "dxMaxX", "dxMaxY");
+  els.dialuxNearest.textContent = parts.length
+    ? parts.join(" · ")
+    : "Enter Dialux min/max coordinates to compare lux at the nearest patch (no re-run).";
+}
+
 function renderAll() {
   const layer = layers.find((l) => l.id === els.floorLayer.value) || layers[0];
-  const s = stats(layer.matrix.values);
-  els.stats.textContent = `${result.fixtures.length} fixtures · ${result.floorPatches.length} floor patches · ${layer.label} min ${s.min.toFixed(1)} / avg ${s.avg.toFixed(1)} / max ${s.max.toFixed(1)} lux`;
-  drawPlan(layer.matrix);
+  const values = layer.matrix.values;
+  const kept = keptFloorIndices(result.floorPatches);
+  const s = layerStats(values, kept);
+  const z = result.floorPatches[0]?.center.z;
+  const zBit = Number.isFinite(z) ? ` · work plane z=${z.toFixed(2)}` : "";
+  const minBit = s.kept ? `min ${s.min.toFixed(1)} @ ${fmtXY(result.floorPatches[s.minI].center)}` : "min —";
+  const maxBit = s.kept ? `max ${s.max.toFixed(1)} @ ${fmtXY(result.floorPatches[s.maxI].center)}` : "max —";
+  els.stats.textContent = `${result.fixtures.length} fixtures · kept ${s.kept} / ${result.floorPatches.length}${zBit} · ${layer.label} ${minBit} / avg ${s.avg.toFixed(1)} / ${maxBit} lux`;
+  drawPlan(layer.matrix, s, kept);
+  dialuxCompare(values);
 
   els.walls.innerHTML = "";
   for (const [wid, patches] of Object.entries(result.wallPatches)) {
@@ -429,6 +555,14 @@ function renderAll() {
 }
 
 els.floorLayer.addEventListener("change", renderAll);
+els.wallMargin.addEventListener("input", () => {
+  if (result) renderAll();
+});
+["dxMinX", "dxMinY", "dxMaxX", "dxMaxY"].forEach((id) => {
+  document.getElementById(id).addEventListener("input", () => {
+    if (result) dialuxCompare((layers.find((l) => l.id === els.floorLayer.value) || layers[0]).matrix.values);
+  });
+});
 
 function showStatus(text, kind) {
   els.status.hidden = false;

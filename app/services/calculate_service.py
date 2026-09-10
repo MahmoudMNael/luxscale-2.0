@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import time
 
-from app.app_settings import MAINTENANCE_FACTOR, REFLECTANCE_FACTOR, WORK_PLANE_HEIGHT
+from app.app_settings import FLOOR_BORDER, MAINTENANCE_FACTOR, REFLECTANCE_FACTOR, WORK_PLANE_HEIGHT, PATCH_SIZE, FLOOR_BORDER, EDGE
 from app.domain.exceptions import GeometryError
 from app.domain.models import Fixture, FloorSurface, Matrix, Patch, Vec3, WallSurface
 from app.schemas.calculate import CalculateRequest, CalculateResponse, FixtureDto
@@ -17,8 +17,6 @@ from app.services.indirect_illuminance_service import compute_indirect_matrix_fr
 from app.services.matrix_service import apply_maintenance_factor, sum_matrices
 
 _log = logging.getLogger(__name__)
-_PATCH_SIZE = 0.5
-_EDGE = "shrink" # "shrink" or "clip" or "pad"
 
 
 def calculate(payload: CalculateRequest, ies_text: str) -> CalculateResponse:
@@ -34,17 +32,21 @@ def calculate(payload: CalculateRequest, ies_text: str) -> CalculateResponse:
         payload.grid.y.offset_beginning,
         payload.grid.y.offset_ending,
     )
-    room = define_room([(p.x, p.y) for p in payload.polygon], payload.height, step=_PATCH_SIZE)
+    room = define_room([(p.x, p.y) for p in payload.polygon], payload.height, step=PATCH_SIZE)
     floor_patches = generate_patches(
-        FloorSurface(room.polygon), _PATCH_SIZE, _EDGE, plane_z=WORK_PLANE_HEIGHT
+        FloorSurface(room.polygon),
+        PATCH_SIZE,
+        EDGE,
+        plane_z=WORK_PLANE_HEIGHT,
+        border=FLOOR_BORDER,
     )
     if not floor_patches:
         raise GeometryError("No floor patches remain after clipping to the polygon.")
     wall_patches = {
         wall.id: generate_patches(
             WallSurface(wall.id, wall.start, wall.end, wall.height, wall.normal),
-            _PATCH_SIZE,
-            _EDGE,
+            PATCH_SIZE,
+            EDGE,
             plane_z=WORK_PLANE_HEIGHT,
         )
         for wall in room.walls
@@ -60,7 +62,7 @@ def calculate(payload: CalculateRequest, ies_text: str) -> CalculateResponse:
     _log.info("fixtures=%s", len(fixtures))
 
     raw_floor_direct = {
-        fixture.id: compute_direct_matrix(fixture, floor_patches, "floor", patch_size=_PATCH_SIZE)
+        fixture.id: compute_direct_matrix(fixture, floor_patches, "floor", patch_size=PATCH_SIZE)
         for fixture in fixtures
     }
     raw_wall_direct: dict[str, dict[str, Matrix]] = {wall.id: {} for wall in room.walls}
@@ -70,7 +72,7 @@ def calculate(payload: CalculateRequest, ies_text: str) -> CalculateResponse:
                 fixture,
                 wall_patches[wall.id],
                 "wall",
-                patch_size=_PATCH_SIZE,
+                patch_size=PATCH_SIZE,
                 wall_id=wall.id,
             )
 
@@ -83,7 +85,7 @@ def calculate(payload: CalculateRequest, ies_text: str) -> CalculateResponse:
             floor_patches,
             REFLECTANCE_FACTOR,
             source_wall_id=wall.id,
-            patch_size=_PATCH_SIZE,
+            patch_size=PATCH_SIZE,
         )
 
     raw_total = sum_matrices([*raw_floor_direct.values(), *raw_indirect.values()])

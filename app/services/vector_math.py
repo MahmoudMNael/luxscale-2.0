@@ -92,6 +92,20 @@ def _rings(geom: BaseGeometry) -> list[list[Vec2]]:
     return []
 
 
+def inset_rings(polygon: list[Vec2], border: float) -> list[list[Vec2]]:
+    """Interior offset of the room polygon. Empty if the inset collapses."""
+    if border <= EPS:
+        ring = _close_ring(polygon)
+        return [ring] if len(ring) >= 3 else []
+    return _rings(_room(polygon).buffer(-border, join_style=2, mitre_limit=5.0))
+
+
+def _close_ring(polygon: list[Vec2]) -> list[Vec2]:
+    if len(polygon) >= 2 and polygon[0] == polygon[-1]:
+        return list(polygon[:-1])
+    return list(polygon)
+
+
 def clip_rect_to_polygon(rect: tuple[float, float, float, float], polygon: list[Vec2]) -> list[list[Vec2]]:
     """Return intersection rings of an axis-aligned cell with the room polygon."""
     xmin, ymin, xmax, ymax = rect
