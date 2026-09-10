@@ -44,6 +44,7 @@ class IESProfile:
     multiplier: float
     ballast_factor: float
     ballast_lamp_factor: float
+    flux_scale: float
     width: float
     length: float
     height: float

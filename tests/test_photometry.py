@@ -7,7 +7,7 @@ from app.domain.models import Fixture, Patch
 from app.services.direct_illuminance_service import compute_direct_illuminance
 from app.services.fixture_service import generate_fixture_grid, luminous_opening
 from app.services.geometry_service import define_room
-from app.services.ies_service import get_candela, load_ies
+from app.services.ies_service import _zonal_lumens, get_candela, load_ies
 from app.schemas.grid import AxisGrid, GridInput
 from tests.ies_sample import SAMPLE_IES, ies_with
 
@@ -39,10 +39,24 @@ def _nadir_patch() -> Patch:
 def test_load_type_c_and_interpolate():
     profile = load_ies(SAMPLE_IES)
     assert profile.multiplier == 1.0
+    k = profile.flux_scale
     nadir = get_candela(profile, 0, 0)
     mid = get_candela(profile, 45, 90)
-    assert nadir == 1000
-    assert 700 == mid or abs(mid - 700) < 1e-9
+    assert nadir == pytest.approx(1000 * k)
+    assert mid == pytest.approx(700 * k)
+
+
+def test_relative_flux_matches_header_lumens():
+    profile = load_ies(SAMPLE_IES)
+    phi = _zonal_lumens(profile.vertical_angles, profile.horizontal_angles, profile.candela_table)
+    assert phi * profile.multiplier * profile.flux_scale == pytest.approx(1000)
+    assert profile.flux_scale != pytest.approx(1.0)
+
+
+def test_absolute_photometry_skips_flux_scale():
+    profile = load_ies(ies_with(lumens=-1))
+    assert profile.flux_scale == 1.0
+    assert get_candela(profile, 0, 0) == pytest.approx(1000)
 
 
 def test_ballast_factor_scales_candela():
@@ -94,7 +108,10 @@ def test_zero_opening_is_one_element_at_centre():
     corners, elements = luminous_opening(_downlight(load_ies(SAMPLE_IES)))
     assert len(corners) == 4
     assert elements == [(0.0, 0.0, 3.0)]
-    assert compute_direct_illuminance(_downlight(load_ies(SAMPLE_IES)), _nadir_patch()) == pytest.approx(1000 / 9)
+    ies = load_ies(SAMPLE_IES)
+    assert compute_direct_illuminance(_downlight(ies), _nadir_patch()) == pytest.approx(
+        get_candela(ies, 0, 0) / 9
+    )
 
 
 def test_panel_opening_corners_and_elements():
@@ -125,5 +142,6 @@ def test_demo_sample_ies_opening():
     assert profile.length == pytest.approx(0.55)
     assert profile.height == pytest.approx(0.011)
     assert profile.ballast_factor == pytest.approx(1.0)
+    assert 0.5 < profile.flux_scale < 2.0
     _, elements = luminous_opening(_downlight(profile, z=3.0 - profile.height / 2.0))
     assert len(elements) == 9

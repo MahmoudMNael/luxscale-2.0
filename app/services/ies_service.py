@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 from app.domain.exceptions import IesParseError
 from app.domain.models import IESProfile
 from app.services.vector_math import EPS, wrap_deg
@@ -48,13 +50,20 @@ def load_ies(ies_text: str) -> IESProfile:
             table[v][h] = raw[k]
             k += 1
     feet = 0.3048 if int(nums[6]) == 1 else 1.0
+    lamps, lumens = nums[0], nums[1]
+    multiplier = nums[2]
+    flux = _zonal_lumens(vertical, horizontal, table) * multiplier
+    flux_scale = 1.0
+    if lumens > 0 and flux > EPS:
+        flux_scale = (lamps * lumens) / flux
     return IESProfile(
         vertical,
         horizontal,
         table,
-        nums[2],
+        multiplier,
         nums[10],
         nums[11],
+        flux_scale,
         abs(nums[7]) * feet,
         abs(nums[8]) * feet,
         abs(nums[9]) * feet,
@@ -63,7 +72,7 @@ def load_ies(ies_text: str) -> IESProfile:
 
 def get_candela(profile: IESProfile, theta_vertical_deg: float, phi_horizontal_deg: float) -> float:
     iv0, iv1, tv = _bracket(profile.vertical_angles, theta_vertical_deg)
-    scale = profile.multiplier * profile.ballast_factor * profile.ballast_lamp_factor
+    scale = profile.multiplier * profile.ballast_factor * profile.ballast_lamp_factor * profile.flux_scale
     if len(profile.horizontal_angles) == 1:
         value = _lerp(profile.candela_table[iv0][0], profile.candela_table[iv1][0], tv)
         return value * scale
@@ -71,6 +80,27 @@ def get_candela(profile: IESProfile, theta_vertical_deg: float, phi_horizontal_d
     lo = _lerp(profile.candela_table[iv0][ih0], profile.candela_table[iv0][ih1], th)
     hi = _lerp(profile.candela_table[iv1][ih0], profile.candela_table[iv1][ih1], th)
     return _lerp(lo, hi, tv) * scale
+
+
+def _zonal_lumens(vertical: list[float], horizontal: list[float], table: list[list[float]]) -> float:
+    n_v, n_h = len(vertical), len(horizontal)
+    if n_v < 2 or n_h < 1:
+        return 0.0
+    if n_h == 1:
+        dphi = [2.0 * math.pi]
+    else:
+        dphi = []
+        for j in range(n_h):
+            step = (horizontal[(j + 1) % n_h] - horizontal[j]) % 360.0
+            if step == 0.0:
+                step = 360.0 / n_h
+            dphi.append(math.radians(step))
+    flux = 0.0
+    for i in range(n_v - 1):
+        band = math.cos(math.radians(vertical[i])) - math.cos(math.radians(vertical[i + 1]))
+        for j in range(n_h):
+            flux += 0.5 * (table[i][j] + table[i + 1][j]) * dphi[j if n_h > 1 else 0] * band
+    return flux
 
 
 def _lerp(a: float, b: float, t: float) -> float:

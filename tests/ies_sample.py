@@ -11,10 +11,10 @@ TILT=NONE
 """
 
 
-def ies_with(*, ballast=1.0, blf=1.0, units=2, width=0.0, length=0.0, height=0.0) -> str:
+def ies_with(*, ballast=1.0, blf=1.0, units=2, width=0.0, length=0.0, height=0.0, lumens=1000.0) -> str:
     return (
         "IESNA:LM-63-2002\nTILT=NONE\n"
-        f"1 1000 1 5 1 1 {units} {width} {length} {height}\n"
+        f"1 {lumens} 1 5 1 1 {units} {width} {length} {height}\n"
         f"{ballast} {blf} 1\n"
         "0 45 90 135 180\n"
         "0\n"
