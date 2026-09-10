@@ -22,6 +22,12 @@ def _payload() -> CalculateRequest:
 def test_pipeline_floor_lux_and_maintenance_metadata():
     result = calculate(_payload(), SAMPLE_IES)
     assert result.fixtures
+    fixture = result.fixtures[0]
+    assert len(fixture.corners) == 4
+    assert len(fixture.elements) == 1
+    assert fixture.length == 0
+    assert fixture.width == 0
+    assert fixture.height == 0
     assert result.floorPatches
     assert all(p.center.z == WORK_PLANE_HEIGHT for p in result.floorPatches)
     total = result.totalFloorIlluminance.values

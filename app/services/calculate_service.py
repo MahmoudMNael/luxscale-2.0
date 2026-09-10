@@ -5,19 +5,19 @@ import time
 
 from app.app_settings import MAINTENANCE_FACTOR, REFLECTANCE_FACTOR, WORK_PLANE_HEIGHT
 from app.domain.exceptions import GeometryError
-from app.domain.models import FloorSurface, Matrix, Patch, WallSurface
+from app.domain.models import Fixture, FloorSurface, Matrix, Patch, Vec3, WallSurface
 from app.schemas.calculate import CalculateRequest, CalculateResponse, FixtureDto
 from app.schemas.geometry import PatchDto, Vec3Dto
 from app.schemas.matrix import MatrixDto
 from app.services.direct_illuminance_service import compute_direct_matrix
-from app.services.fixture_service import generate_fixture_grid
+from app.services.fixture_service import generate_fixture_grid, luminous_opening
 from app.services.geometry_service import define_room, generate_patches
 from app.services.ies_service import load_ies
 from app.services.indirect_illuminance_service import compute_indirect_matrix_from_wall
 from app.services.matrix_service import apply_maintenance_factor, sum_matrices
 
 _log = logging.getLogger(__name__)
-_PATCH_SIZE = 0.1
+_PATCH_SIZE = 0.5
 _EDGE = "shrink" # "shrink" or "clip" or "pad"
 
 
@@ -89,19 +89,7 @@ def calculate(payload: CalculateRequest, ies_text: str) -> CalculateResponse:
     raw_total = sum_matrices([*raw_floor_direct.values(), *raw_indirect.values()])
     mf = MAINTENANCE_FACTOR
     response = CalculateResponse(
-        fixtures=[
-            FixtureDto(
-                id=fixture.id,
-                position=Vec3Dto(x=fixture.position[0], y=fixture.position[1], z=fixture.position[2]),
-                aimDirection=Vec3Dto(
-                    x=fixture.aim_direction[0],
-                    y=fixture.aim_direction[1],
-                    z=fixture.aim_direction[2],
-                ),
-                rotation=fixture.rotation,
-            )
-            for fixture in fixtures
-        ],
+        fixtures=[_fixture(fixture) for fixture in fixtures],
         floorPatches=[_patch(p) for p in floor_patches],
         wallPatches={wid: [_patch(p) for p in pts] for wid, pts in wall_patches.items()},
         directFloorMatrices={fid: _matrix(apply_maintenance_factor(m, mf)) for fid, m in raw_floor_direct.items()},
@@ -114,6 +102,25 @@ def calculate(payload: CalculateRequest, ies_text: str) -> CalculateResponse:
     )
     _log.info("success duration_ms=%.1f", (time.perf_counter() - started) * 1000)
     return response
+
+
+def _vec(v: Vec3) -> Vec3Dto:
+    return Vec3Dto(x=v[0], y=v[1], z=v[2])
+
+
+def _fixture(fixture: Fixture) -> FixtureDto:
+    corners, elements = luminous_opening(fixture)
+    return FixtureDto(
+        id=fixture.id,
+        position=_vec(fixture.position),
+        aimDirection=_vec(fixture.aim_direction),
+        rotation=fixture.rotation,
+        length=fixture.ies_profile.length,
+        width=fixture.ies_profile.width,
+        height=fixture.ies_profile.height,
+        corners=[_vec(c) for c in corners],
+        elements=[_vec(e) for e in elements],
+    )
 
 
 def _patch(patch: Patch) -> PatchDto:

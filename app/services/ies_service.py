@@ -47,18 +47,30 @@ def load_ies(ies_text: str) -> IESProfile:
         for v in range(n_v):
             table[v][h] = raw[k]
             k += 1
-    return IESProfile(vertical, horizontal, table, nums[2])
+    feet = 0.3048 if int(nums[6]) == 1 else 1.0
+    return IESProfile(
+        vertical,
+        horizontal,
+        table,
+        nums[2],
+        nums[10],
+        nums[11],
+        abs(nums[7]) * feet,
+        abs(nums[8]) * feet,
+        abs(nums[9]) * feet,
+    )
 
 
 def get_candela(profile: IESProfile, theta_vertical_deg: float, phi_horizontal_deg: float) -> float:
     iv0, iv1, tv = _bracket(profile.vertical_angles, theta_vertical_deg)
+    scale = profile.multiplier * profile.ballast_factor * profile.ballast_lamp_factor
     if len(profile.horizontal_angles) == 1:
         value = _lerp(profile.candela_table[iv0][0], profile.candela_table[iv1][0], tv)
-        return value * profile.multiplier
+        return value * scale
     ih0, ih1, th = _phi_bracket(profile.horizontal_angles, phi_horizontal_deg)
     lo = _lerp(profile.candela_table[iv0][ih0], profile.candela_table[iv0][ih1], th)
     hi = _lerp(profile.candela_table[iv1][ih0], profile.candela_table[iv1][ih1], th)
-    return _lerp(lo, hi, tv) * profile.multiplier
+    return _lerp(lo, hi, tv) * scale
 
 
 def _lerp(a: float, b: float, t: float) -> float:

@@ -42,6 +42,11 @@ class IESProfile:
     horizontal_angles: list[float]
     candela_table: list[list[float]]
     multiplier: float
+    ballast_factor: float
+    ballast_lamp_factor: float
+    width: float
+    length: float
+    height: float
 
 
 @dataclass(frozen=True)

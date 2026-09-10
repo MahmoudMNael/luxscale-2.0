@@ -12,6 +12,11 @@ class FixtureDto(BaseModel):
     position: Vec3Dto
     aimDirection: Vec3Dto
     rotation: float = 0.0
+    length: float = Field(..., description="Luminous opening along C0, metres")
+    width: float = Field(..., description="Luminous opening along C90, metres")
+    height: float = Field(..., description="Luminous opening height, metres")
+    corners: list[Vec3Dto] = Field(..., min_length=4, max_length=4, description="World-space opening corners, CCW")
+    elements: list[Vec3Dto] = Field(..., min_length=1, description="Sample points used in the direct I/N sum")
 
 
 class CalculateRequest(BaseModel):

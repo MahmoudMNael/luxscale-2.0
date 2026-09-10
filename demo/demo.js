@@ -263,7 +263,7 @@ function drawPlan(layer) {
   const ctx = canvas.getContext("2d");
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   const pts = result.floorPatches.map((p) => p.center);
-  const extra = result.fixtures.map((f) => f.position);
+  const extra = result.fixtures.flatMap((f) => [f.position, ...(f.corners || []), ...(f.elements || [])]);
   const b = boundsOf([...pts, ...extra, ...vertices]);
   const to = mapper(canvas, b);
   const { min, max } = stats(layer.values);
@@ -291,18 +291,37 @@ function drawPlan(layer) {
   ctx.stroke();
 
   result.fixtures.forEach((f) => {
+    const corners = f.corners || [];
+    const degenerate = !(f.length > 0 || f.width > 0);
+    if (corners.length >= 4 && !degenerate) {
+      ctx.beginPath();
+      corners.forEach((c, i) => {
+        const p = to(c.x, c.y);
+        if (i === 0) ctx.moveTo(p.x, p.y);
+        else ctx.lineTo(p.x, p.y);
+      });
+      ctx.closePath();
+      ctx.fillStyle = "rgba(224, 161, 6, 0.35)";
+      ctx.strokeStyle = "#e0a106";
+      ctx.lineWidth = 1.5;
+      ctx.fill();
+      ctx.stroke();
+    }
+    (f.elements || []).forEach((e) => {
+      const p = to(e.x, e.y);
+      ctx.fillStyle = "#e0a106";
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, degenerate ? 4 : 2, 0, Math.PI * 2);
+      ctx.fill();
+    });
     const p = to(f.position.x, f.position.y);
-    ctx.fillStyle = "#e0a106";
-    ctx.beginPath();
-    ctx.moveTo(p.x, p.y - 7);
-    ctx.lineTo(p.x + 7, p.y);
-    ctx.lineTo(p.x, p.y + 7);
-    ctx.lineTo(p.x - 7, p.y);
-    ctx.closePath();
-    ctx.fill();
     ctx.fillStyle = "#fff7cc";
     ctx.font = "11px sans-serif";
-    ctx.fillText(`${f.id}  z=${f.position.z}`, p.x + 8, p.y - 6);
+    ctx.fillText(
+      `${f.id}  z=${f.position.z.toFixed(3)}  ${Number(f.length).toFixed(2)}×${Number(f.width).toFixed(2)}`,
+      p.x + 8,
+      p.y - 6
+    );
   });
 }
 
@@ -400,11 +419,11 @@ function renderAll() {
     }
   }
   els.matrices.innerHTML = `<article class="matrix"><h3>fixtures</h3><table>
-    <thead><tr><th>id</th><th>x</th><th>y</th><th>z</th><th>aim</th><th>rot</th></tr></thead>
+    <thead><tr><th>id</th><th>x</th><th>y</th><th>z</th><th>L×W×H</th><th>elements</th><th>aim</th><th>rot</th></tr></thead>
     <tbody>${result.fixtures
       .map(
         (f) =>
-          `<tr><td>${f.id}</td><td>${f.position.x}</td><td>${f.position.y}</td><td>${f.position.z}</td><td>(${f.aimDirection.x}, ${f.aimDirection.y}, ${f.aimDirection.z})</td><td>${f.rotation}</td></tr>`
+          `<tr><td>${f.id}</td><td>${f.position.x}</td><td>${f.position.y}</td><td>${f.position.z}</td><td>${f.length}×${f.width}×${f.height}</td><td>${(f.elements || []).length}</td><td>(${f.aimDirection.x}, ${f.aimDirection.y}, ${f.aimDirection.z})</td><td>${f.rotation}</td></tr>`
       )
       .join("")}</tbody></table></article>${blocks.join("")}`;
 }
