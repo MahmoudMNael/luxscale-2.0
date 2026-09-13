@@ -7,6 +7,23 @@ from app.schemas.grid import GridInput
 from app.schemas.matrix import MatrixDto
 
 
+class EvaluationDto(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, serialize_by_alias=True)
+
+    average: float = Field(..., description="Eavg over EN 12464 evaluation points, lux")
+    minimum: float = Field(..., description="Emin over evaluation points, lux")
+    maximum: float = Field(..., description="Emax over evaluation points, lux")
+    uniformity: float = Field(..., description="U0 = Emin / Eavg")
+    minPoint: Vec3Dto = Field(..., description="Center of the Emin evaluation point")
+    maxPoint: Vec3Dto = Field(..., description="Center of the Emax evaluation point")
+    count: int = Field(..., description="Number of EN 12464 evaluation points")
+    spacing: float = Field(..., description="EN 12464 target spacing p, meters")
+    nx: int = Field(..., description="Cells along X over the inset bounding box")
+    ny: int = Field(..., description="Cells along Y over the inset bounding box")
+    wallZone: float = Field(..., description="Applied boundary inset, meters")
+    workPlaneHeight: float = Field(..., description="Applied calculation-surface height, meters")
+
+
 class FixtureDto(BaseModel):
     id: str
     position: Vec3Dto
@@ -48,6 +65,16 @@ class CalculateRequest(BaseModel):
     )
     height: float = Field(..., gt=0, description="Room height in meters")
     grid: GridInput
+    workPlaneHeight: float = Field(
+        default=0.0,
+        ge=0,
+        description="DIALux-like calculation-surface height in meters (0 = true floor)",
+    )
+    wallZone: float = Field(
+        default=0.25,
+        ge=0,
+        description="DIALux-like boundary/wall zone inset in meters; EN 12464 evaluation excludes this strip",
+    )
 
 
 class CalculateResponse(BaseModel):
@@ -65,5 +92,6 @@ class CalculateResponse(BaseModel):
         "summed over all bounces originating from that wall",
     )
     totalFloorIlluminance: MatrixDto
+    evaluation: EvaluationDto = Field(..., description="EN 12464 summary over the total floor matrix")
     bounces: int = Field(..., description="Applied wall bounces (app_settings.NUM_BOUNCES)")
     wallReflectance: float = Field(..., description="Applied wall reflectance (app_settings.WALL_REFLECTANCE_FACTOR)")

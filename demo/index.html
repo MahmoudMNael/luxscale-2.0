@@ -21,7 +21,17 @@
 
       <label>Room height (m)
         <input id="height" type="number" min="0.01" step="0.01" value="4" required />
-        <span class="hint">Floor samples use the returned patch z (0 = true floor). Match Dialux calc surface to 0, not 0.75/0.85.</span>
+        <span class="hint">Room height. Calculation surface height is set below.</span>
+      </label>
+
+      <label>Work plane height (m)
+        <input id="workPlaneHeight" type="number" min="0" step="0.01" value="0" required />
+        <span class="hint">DIALux calculation-surface height. Use 0 for true floor, 0.75/0.85 to match Dialux working plane.</span>
+      </label>
+
+      <label>Wall zone (m)
+        <input id="wallZone" type="number" min="0" step="0.05" value="0.25" required />
+        <span class="hint">DIALux boundary zone. EN 12464 points exclude this strip; must match Dialux to compare Emin.</span>
       </label>
 
       <fieldset>
@@ -67,7 +77,7 @@
         </label>
         <label>Wall margin (m)
           <input id="wallMargin" type="number" min="0" step="0.05" value="0" />
-          <span class="hint">Extra filter. Floor samples are already EN 12464 cell centres after a 0.25 m wall zone.</span>
+          <span class="hint">Extra client-side filter only. Server points are already EN 12464 cell centres after the wall zone above.</span>
         </label>
         <div id="stats" class="stats muted">No run yet</div>
       </div>
@@ -93,7 +103,7 @@
         <aside class="legend">
           <div id="legendBar"></div>
           <div class="legend-ends"><span id="legMin">0</span><span>lux</span><span id="legMax">0</span></div>
-          <p class="hint">Squares = EN 12464 floor points (0.25 m wall zone). Rings = min / max of kept samples. Amber = luminous opening. Wall margin extra-filters those points without re-running.</p>
+          <p class="hint">Squares = EN 12464 floor points at the wall zone above. Rings = min / max of kept samples. Amber = luminous opening. Wall margin extra-filters those points without re-running. For Dialux parity use Dialux standard grid (EN 12464), not adaptive.</p>
         </aside>
       </div>
 

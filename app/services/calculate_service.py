@@ -5,13 +5,13 @@ import time
 
 from app.app_settings import FLOOR_BORDER, MAINTENANCE_FACTOR, NUM_BOUNCES, PATCH_SIZE, WALL_REFLECTANCE_FACTOR, WORK_PLANE_HEIGHT
 from app.domain.exceptions import GeometryError
-from app.domain.models import Fixture, FloorSurface, Matrix, Patch, Vec3, WallSurface
-from app.schemas.calculate import CalculateRequest, CalculateResponse, FixtureDto
+from app.domain.models import Fixture, Matrix, Patch, Vec3, WallSurface
+from app.schemas.calculate import CalculateRequest, CalculateResponse, EvaluationDto, FixtureDto
 from app.schemas.geometry import PatchDto, Vec3Dto
 from app.schemas.matrix import MatrixDto
 from app.services.direct_illuminance_service import compute_direct_matrix
 from app.services.fixture_service import generate_fixture_grid, luminous_opening
-from app.services.geometry_service import define_room, generate_patches
+from app.services.geometry_service import define_room, generate_floor_evaluation_grid, generate_patches
 from app.services.ies_service import load_ies
 from app.services.indirect_illuminance_service import compute_indirect_floor_per_origin
 from app.services.matrix_service import apply_maintenance_factor, sum_matrices
@@ -33,18 +33,16 @@ def calculate(payload: CalculateRequest, ies_text: str) -> CalculateResponse:
         payload.grid.y.offset_ending,
     )
     room = define_room([(p.x, p.y) for p in payload.polygon], payload.height, step=PATCH_SIZE)
-    floor_patches = generate_patches(
-        FloorSurface(room.polygon),
-        plane_z=WORK_PLANE_HEIGHT,
-        border=FLOOR_BORDER,
-    )
+    work_z = payload.workPlaneHeight if payload.workPlaneHeight is not None else WORK_PLANE_HEIGHT
+    wall_zone = payload.wallZone if payload.wallZone is not None else FLOOR_BORDER
+    floor_patches, grid_meta = generate_floor_evaluation_grid(room.polygon, work_z, wall_zone)
     if not floor_patches:
         raise GeometryError("No floor patches remain after clipping to the polygon.")
     wall_patches = {
         wall.id: generate_patches(
             WallSurface(wall.id, wall.start, wall.end, wall.height, wall.normal),
             PATCH_SIZE,
-            plane_z=WORK_PLANE_HEIGHT,
+            plane_z=work_z,
         )
         for wall in room.walls
     }
@@ -125,6 +123,8 @@ def calculate(payload: CalculateRequest, ies_text: str) -> CalculateResponse:
     raw_total = sum_matrices([*raw_floor_direct.values(), *raw_indirect.values()])
     mf = MAINTENANCE_FACTOR
     applied_bounces = NUM_BOUNCES if fixtures and NUM_BOUNCES > 0 else 0
+    total_maintained = apply_maintenance_factor(raw_total, mf)
+    evaluation = _evaluation(floor_patches, total_maintained.values, grid_meta, work_z, wall_zone)
     response = CalculateResponse(
         fixtures=[_fixture(fixture) for fixture in fixtures],
         floorPatches=[_patch(p) for p in floor_patches],
@@ -135,7 +135,8 @@ def calculate(payload: CalculateRequest, ies_text: str) -> CalculateResponse:
             for wid, per_fix in raw_wall_direct.items()
         },
         indirectFloorMatrices={wid: _matrix(apply_maintenance_factor(m, mf)) for wid, m in raw_indirect.items()},
-        totalFloorIlluminance=_matrix(apply_maintenance_factor(raw_total, mf)),
+        totalFloorIlluminance=_matrix(total_maintained),
+        evaluation=evaluation,
         bounces=applied_bounces,
         wallReflectance=WALL_REFLECTANCE_FACTOR,
     )
@@ -181,3 +182,31 @@ def _patch(patch: Patch) -> PatchDto:
 
 def _matrix(matrix: Matrix) -> MatrixDto:
     return MatrixDto(values=matrix.values, metadata=matrix.metadata)
+
+
+def _evaluation(
+    floor_patches: list[Patch],
+    total_values: list[float],
+    grid_meta: dict[str, float],
+    work_z: float,
+    wall_zone: float,
+) -> EvaluationDto:
+    lo = min(total_values)
+    hi = max(total_values)
+    avg = sum(total_values) / len(total_values)
+    i_min = total_values.index(lo)
+    i_max = total_values.index(hi)
+    return EvaluationDto(
+        average=avg,
+        minimum=lo,
+        maximum=hi,
+        uniformity=(lo / avg if avg > 0 else 0.0),
+        minPoint=_vec(floor_patches[i_min].center),
+        maxPoint=_vec(floor_patches[i_max].center),
+        count=len(floor_patches),
+        spacing=float(grid_meta.get("spacing", 0.0)),
+        nx=int(grid_meta.get("nx", 0)),
+        ny=int(grid_meta.get("ny", 0)),
+        wallZone=wall_zone,
+        workPlaneHeight=work_z,
+    )

@@ -66,17 +66,35 @@ def generate_patches(
 
 
 def _floor_patches(surface: FloorSurface, plane_z: float, border: float) -> list[Patch]:
-    domains = inset_rings(surface.polygon, border)
+    patches, _ = generate_floor_evaluation_grid(surface.polygon, plane_z, border)
+    return patches
+
+
+def generate_floor_evaluation_grid(
+    polygon: list[Vec2], plane_z: float, border: float
+) -> tuple[list[Patch], dict[str, float]]:
+    """DIALux-like EN 12464 standard grid.
+
+    Effective region = polygon inset by wall-zone ``border``; ``d`` is the
+    longer side of the inset bounding box, ``p = en12464_spacing(d)``,
+    ``nx = ceil(width / p)``, ``ny = ceil(height / p)``, cell centres kept
+    when inside the inset region. Returns patches plus grid metadata so the
+    API can report the exact evaluation lattice DIALux compares against.
+    """
+    domains = inset_rings(polygon, border)
     if not domains:
-        return []
+        return [], {"spacing": 0.0, "nx": 0, "ny": 0, "dx": 0.0, "dy": 0.0,
+                    "xmin": 0.0, "xmax": 0.0, "ymin": 0.0, "ymax": 0.0}
     xs = [p[0] for ring in domains for p in ring]
     ys = [p[1] for ring in domains for p in ring]
     width, height = max(xs) - min(xs), max(ys) - min(ys)
     if width <= EPS or height <= EPS:
-        return []
+        return [], {"spacing": 0.0, "nx": 0, "ny": 0, "dx": 0.0, "dy": 0.0,
+                    "xmin": min(xs), "xmax": max(xs), "ymin": min(ys), "ymax": max(ys)}
     spacing = en12464_spacing(max(width, height))
     if spacing <= EPS:
-        return []
+        return [], {"spacing": 0.0, "nx": 0, "ny": 0, "dx": 0.0, "dy": 0.0,
+                    "xmin": min(xs), "xmax": max(xs), "ymin": min(ys), "ymax": max(ys)}
     xmin, xmax, ymin, ymax = min(xs), max(xs), min(ys), max(ys)
     nx = max(1, math.ceil(width / spacing - EPS))
     ny = max(1, math.ceil(height / spacing - EPS))
@@ -103,7 +121,9 @@ def _floor_patches(surface: FloorSurface, plane_z: float, border: float) -> list
                 )
             )
             n += 1
-    return patches
+    meta = {"spacing": spacing, "nx": float(nx), "ny": float(ny), "dx": dx, "dy": dy,
+            "xmin": xmin, "xmax": xmax, "ymin": ymin, "ymax": ymax}
+    return patches, meta
 
 
 def _wall_patches(surface: WallSurface, size: float) -> list[Patch]:

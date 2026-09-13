@@ -524,11 +524,15 @@ function renderAll() {
   const values = layer.matrix.values;
   const kept = keptFloorIndices(result.floorPatches);
   const s = layerStats(values, kept);
+  const ev = result.evaluation;
+  const evBit = ev
+    ? ` · EN12464 ${ev.nx}×${ev.ny} p=${Number(ev.spacing).toFixed(3)} z=${Number(ev.workPlaneHeight).toFixed(2)} wz=${Number(ev.wallZone).toFixed(2)} Emin ${Number(ev.minimum).toFixed(1)} @ ${fmtXY(ev.minPoint)} Emax ${Number(ev.maximum).toFixed(1)} @ ${fmtXY(ev.maxPoint)} U0=${Number(ev.uniformity).toFixed(3)}`
+    : "";
   const z = result.floorPatches[0]?.center.z;
   const zBit = Number.isFinite(z) ? ` · work plane z=${z.toFixed(2)}` : "";
   const minBit = s.kept ? `min ${s.min.toFixed(1)} @ ${fmtXY(result.floorPatches[s.minI].center)}` : "min —";
   const maxBit = s.kept ? `max ${s.max.toFixed(1)} @ ${fmtXY(result.floorPatches[s.maxI].center)}` : "max —";
-  els.stats.textContent = `${result.fixtures.length} fixtures · ${result.bounces ?? "?"} bounces · ρ=${result.wallReflectance ?? "?"} · kept ${s.kept} / ${result.floorPatches.length}${zBit} · ${layer.label} ${minBit} / avg ${s.avg.toFixed(1)} / ${maxBit} lux`;
+  els.stats.textContent = `${result.fixtures.length} fixtures · ${result.bounces ?? "?"} bounces · ρ=${result.wallReflectance ?? "?"} · kept ${s.kept} / ${result.floorPatches.length}${zBit}${evBit} · ${layer.label} ${minBit} / avg ${s.avg.toFixed(1)} / ${maxBit} lux`;
   drawPlan(layer.matrix, s, kept);
   dialuxCompare(values);
 
@@ -586,6 +590,8 @@ function payload() {
   return {
     polygon: vertices.map((v) => ({ x: v.x, y: v.y })),
     height: num("height"),
+    workPlaneHeight: num("workPlaneHeight"),
+    wallZone: num("wallZone"),
     grid: {
       x: { spacing: num("xSpacing"), offsetBeginning: num("xOffB"), offsetEnding: num("xOffE") },
       y: { spacing: num("ySpacing"), offsetBeginning: num("yOffB"), offsetEnding: num("yOffE") },
