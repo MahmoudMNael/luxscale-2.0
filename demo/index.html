@@ -20,21 +20,21 @@
       <h2>Inputs</h2>
 
       <label>Room height (m)
-        <input id="height" type="number" min="0.01" step="0.01" value="3" required />
+        <input id="height" type="number" min="0.01" step="0.01" value="4" required />
         <span class="hint">Floor samples use the returned patch z (0 = true floor). Match Dialux calc surface to 0, not 0.75/0.85.</span>
       </label>
 
       <fieldset>
         <legend>Fixture grid X</legend>
-        <label>Spacing <input id="xSpacing" type="number" min="0.01" step="0.01" value="2" required /></label>
-        <label>Offset beginning <input id="xOffB" type="number" min="0" step="0.01" value="1" required /></label>
+        <label>Spacing <input id="xSpacing" type="number" min="0.01" step="0.01" value="2.42" required /></label>
+        <label>Offset beginning <input id="xOffB" type="number" min="0" step="0.01" value="1.21" required /></label>
         <label>Offset ending <input id="xOffE" type="number" min="0" step="0.01" value="1" required /></label>
       </fieldset>
 
       <fieldset>
         <legend>Fixture grid Y</legend>
-        <label>Spacing <input id="ySpacing" type="number" min="0.01" step="0.01" value="2" required /></label>
-        <label>Offset beginning <input id="yOffB" type="number" min="0" step="0.01" value="1" required /></label>
+        <label>Spacing <input id="ySpacing" type="number" min="0.01" step="0.01" value="255" required /></label>
+        <label>Offset beginning <input id="yOffB" type="number" min="0" step="0.01" value="2.62" required /></label>
         <label>Offset ending <input id="yOffE" type="number" min="0" step="0.01" value="1" required /></label>
       </fieldset>
 
@@ -67,7 +67,7 @@
         </label>
         <label>Wall margin (m)
           <input id="wallMargin" type="number" min="0" step="0.05" value="0" />
-          <span class="hint">Extra filter. The engine already insets the floor mesh 0.5 m from walls.</span>
+          <span class="hint">Extra filter. Floor samples are already EN 12464 cell centres after a 0.25 m wall zone.</span>
         </label>
         <div id="stats" class="stats muted">No run yet</div>
       </div>
@@ -93,7 +93,7 @@
         <aside class="legend">
           <div id="legendBar"></div>
           <div class="legend-ends"><span id="legMin">0</span><span>lux</span><span id="legMax">0</span></div>
-          <p class="hint">Squares = floor patches (inset 0.5 m from walls). Rings = min / max of kept samples. Amber = luminous opening. Wall margin extra-filters those points without re-running.</p>
+          <p class="hint">Squares = EN 12464 floor points (0.25 m wall zone). Rings = min / max of kept samples. Amber = luminous opening. Wall margin extra-filters those points without re-running.</p>
         </aside>
       </div>
 

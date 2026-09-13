@@ -1,14 +1,15 @@
 from __future__ import annotations
 
+import math
+
 from app.domain.exceptions import GeometryError
 from app.domain.models import FloorSurface, Patch, Room, Wall, WallSurface
 from app.services.vector_math import (
     EPS,
-    centroid_2d,
-    clip_rect_to_polygon,
+    en12464_spacing,
     inset_rings,
     norm,
-    polygon_area,
+    point_in_polygon,
     signed_area,
 )
 
@@ -21,22 +22,13 @@ def _close(vertices: list[Vec2]) -> list[Vec2]:
     return list(vertices)
 
 
-def _segments(start: float, end: float, size: float, handling: str) -> list[tuple[float, float]]:
-    out: list[tuple[float, float]] = []
-    pos = start
-    while end - pos > EPS:
-        if end - pos + EPS >= size:
-            out.append((pos, pos + size))
-            pos += size
-            continue
-        if handling == "clip":
-            break
-        if handling == "pad":
-            out.append((pos, pos + size))
-            break
-        out.append((pos, end))
-        break
-    return out
+def _segments(start: float, end: float, size: float) -> list[tuple[float, float]]:
+    span = end - start
+    if span <= EPS or size <= EPS:
+        return []
+    n = max(1, math.ceil(span / size - EPS))
+    actual = span / n
+    return [(start + i * actual, start + (i + 1) * actual) for i in range(n)]
 
 
 def define_room(vertices: list[Vec2], height: float, step: float = 1.0) -> Room:
@@ -63,51 +55,58 @@ def define_room(vertices: list[Vec2], height: float, step: float = 1.0) -> Room:
 def generate_patches(
     surface: FloorSurface | WallSurface,
     patch_size: float | None = None,
-    edge_handling: str = "shrink",
     *,
     plane_z: float,
     border: float = 0.0,
 ) -> list[Patch]:
-    size = 1.0 if patch_size is None else patch_size
     if isinstance(surface, FloorSurface):
-        return _floor_patches(surface, size, edge_handling, plane_z, border)
-    return _wall_patches(surface, size, edge_handling)
+        return _floor_patches(surface, plane_z, border)
+    size = 1.0 if patch_size is None else patch_size
+    return _wall_patches(surface, size)
 
 
-def _floor_patches(
-    surface: FloorSurface, size: float, edge_handling: str, plane_z: float, border: float
-) -> list[Patch]:
+def _floor_patches(surface: FloorSurface, plane_z: float, border: float) -> list[Patch]:
     domains = inset_rings(surface.polygon, border)
     if not domains:
         return []
     xs = [p[0] for ring in domains for p in ring]
     ys = [p[1] for ring in domains for p in ring]
+    width, height = max(xs) - min(xs), max(ys) - min(ys)
+    if width <= EPS or height <= EPS:
+        return []
+    spacing = en12464_spacing(max(width, height))
+    if spacing <= EPS:
+        return []
+    xmin, xmax, ymin, ymax = min(xs), max(xs), min(ys), max(ys)
+    nx = max(1, math.ceil(width / spacing - EPS))
+    ny = max(1, math.ceil(height / spacing - EPS))
+    dx, dy = width / nx, height / ny
+    area = dx * dy
+    size = max(dx, dy)
     patches: list[Patch] = []
     n = 0
-    for y0, y1 in _segments(min(ys), max(ys), size, edge_handling):
-        for x0, x1 in _segments(min(xs), max(xs), size, edge_handling):
-            for domain in domains:
-                for ring in clip_rect_to_polygon((x0, y0, x1, y1), domain):
-                    area = polygon_area(ring)
-                    if area <= EPS:
-                        continue
-                    cx, cy = centroid_2d(ring)
-                    patches.append(
-                        Patch(
-                            id=f"floor-{n}",
-                            surface_type="floor",
-                            parent_id="floor",
-                            center=(cx, cy, plane_z),
-                            normal=(0.0, 0.0, 1.0),
-                            area=area,
-                            size=size,
-                        )
-                    )
-                    n += 1
+    for j in range(ny):
+        cy = ymin + (j + 0.5) * dy
+        for i in range(nx):
+            cx = xmin + (i + 0.5) * dx
+            if not any(point_in_polygon((cx, cy), domain) for domain in domains):
+                continue
+            patches.append(
+                Patch(
+                    id=f"floor-{n}",
+                    surface_type="floor",
+                    parent_id="floor",
+                    center=(cx, cy, plane_z),
+                    normal=(0.0, 0.0, 1.0),
+                    area=area,
+                    size=size,
+                )
+            )
+            n += 1
     return patches
 
 
-def _wall_patches(surface: WallSurface, size: float, edge_handling: str) -> list[Patch]:
+def _wall_patches(surface: WallSurface, size: float) -> list[Patch]:
     dx = surface.end[0] - surface.start[0]
     dy = surface.end[1] - surface.start[1]
     length = norm((dx, dy))
@@ -116,8 +115,8 @@ def _wall_patches(surface: WallSurface, size: float, edge_handling: str) -> list
     ux, uy = dx / length, dy / length
     patches: list[Patch] = []
     n = 0
-    for z0, z1 in _segments(0.0, surface.height, size, edge_handling):
-        for s0, s1 in _segments(0.0, length, size, edge_handling):
+    for z0, z1 in _segments(0.0, surface.height, size):
+        for s0, s1 in _segments(0.0, length, size):
             s_mid, z_mid = (s0 + s1) / 2.0, (z0 + z1) / 2.0
             patches.append(
                 Patch(
@@ -127,7 +126,7 @@ def _wall_patches(surface: WallSurface, size: float, edge_handling: str) -> list
                     center=(surface.start[0] + ux * s_mid, surface.start[1] + uy * s_mid, z_mid),
                     normal=(surface.normal[0], surface.normal[1], 0.0),
                     area=(s1 - s0) * (z1 - z0),
-                    size=size,
+                    size=max(s1 - s0, z1 - z0),
                 )
             )
             n += 1

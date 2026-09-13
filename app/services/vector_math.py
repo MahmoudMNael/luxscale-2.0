@@ -41,6 +41,13 @@ def wrap_deg(phi: float) -> float:
     return phi % 360.0
 
 
+def en12464_spacing(d: float) -> float:
+    """EN 12464-1 maximum calculation-grid spacing: p = 0.2 × 5^log10(d)."""
+    if d <= EPS:
+        return 0.0
+    return 0.2 * 5.0 ** math.log10(d)
+
+
 def _room(polygon: list[Vec2]) -> Polygon:
     poly = Polygon(polygon)
     if not poly.is_valid:

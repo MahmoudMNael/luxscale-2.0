@@ -1,10 +1,13 @@
+import math
+
 import pytest
 
-from app.app_settings import MAINTENANCE_FACTOR, WORK_PLANE_HEIGHT
+from app.app_settings import FLOOR_BORDER, MAINTENANCE_FACTOR, WORK_PLANE_HEIGHT
 from app.schemas.calculate import CalculateRequest
 from app.schemas.grid import AxisGrid, GridInput
 from app.schemas.geometry import Point2D
 from app.services.calculate_service import calculate
+from app.services.vector_math import EPS, en12464_spacing
 from tests.ies_sample import SAMPLE_IES
 
 
@@ -32,10 +35,15 @@ def test_pipeline_floor_lux_and_maintenance_metadata():
     assert all(p.center.z == WORK_PLANE_HEIGHT for p in result.floorPatches)
     xs = [p.center.x for p in result.floorPatches]
     ys = [p.center.y for p in result.floorPatches]
-    assert min(xs) == pytest.approx(0.75)
-    assert max(xs) == pytest.approx(3.25)
-    assert min(ys) == pytest.approx(0.75)
-    assert max(ys) == pytest.approx(3.25)
+    span = 4.0 - 2 * FLOOR_BORDER
+    spacing = en12464_spacing(span)
+    n = max(1, math.ceil(span / spacing - EPS))
+    half = span / n / 2
+    assert min(xs) == pytest.approx(FLOOR_BORDER + half)
+    assert max(xs) == pytest.approx(4 - FLOOR_BORDER - half)
+    assert min(ys) == pytest.approx(FLOOR_BORDER + half)
+    assert max(ys) == pytest.approx(4 - FLOOR_BORDER - half)
+    assert result.directFloorMatrices[fixture.id].metadata["patchSize"] == pytest.approx(result.floorPatches[0].size)
     total = result.totalFloorIlluminance.values
     assert total
     assert max(total) > 0

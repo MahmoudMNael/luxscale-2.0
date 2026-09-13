@@ -15,6 +15,16 @@ const PRESETS = {
     [3, 8],
     [0, 8],
   ],
+  room: [
+    [0, 0],
+    [4.85, 0],
+    [4.85, 5.26],
+    [1.45, 5.26],
+    [1.45, 4.33],
+    [0.55, 4.33],
+    [0.55, 1.63],
+    [0, 1.63],
+  ],
 };
 
 const els = {
@@ -34,7 +44,7 @@ const els = {
   dialuxNearest: document.getElementById("dialuxNearest"),
 };
 
-let vertices = PRESETS.rect.map(([x, y]) => ({ x, y }));
+let vertices = PRESETS.room.map(([x, y]) => ({ x, y }));
 let result = null;
 let layers = [];
 

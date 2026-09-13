@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import time
 
-from app.app_settings import FLOOR_BORDER, MAINTENANCE_FACTOR, REFLECTANCE_FACTOR, WORK_PLANE_HEIGHT, PATCH_SIZE, FLOOR_BORDER, EDGE
+from app.app_settings import FLOOR_BORDER, MAINTENANCE_FACTOR, PATCH_SIZE, REFLECTANCE_FACTOR, WORK_PLANE_HEIGHT
 from app.domain.exceptions import GeometryError
 from app.domain.models import Fixture, FloorSurface, Matrix, Patch, Vec3, WallSurface
 from app.schemas.calculate import CalculateRequest, CalculateResponse, FixtureDto
@@ -35,8 +35,6 @@ def calculate(payload: CalculateRequest, ies_text: str) -> CalculateResponse:
     room = define_room([(p.x, p.y) for p in payload.polygon], payload.height, step=PATCH_SIZE)
     floor_patches = generate_patches(
         FloorSurface(room.polygon),
-        PATCH_SIZE,
-        EDGE,
         plane_z=WORK_PLANE_HEIGHT,
         border=FLOOR_BORDER,
     )
@@ -46,11 +44,11 @@ def calculate(payload: CalculateRequest, ies_text: str) -> CalculateResponse:
         wall.id: generate_patches(
             WallSurface(wall.id, wall.start, wall.end, wall.height, wall.normal),
             PATCH_SIZE,
-            EDGE,
             plane_z=WORK_PLANE_HEIGHT,
         )
         for wall in room.walls
     }
+    floor_cell = floor_patches[0].size
     _log.info(
         "geometry walls=%s floor_patches=%s wall_patches=%s",
         len(room.walls),
@@ -62,7 +60,7 @@ def calculate(payload: CalculateRequest, ies_text: str) -> CalculateResponse:
     _log.info("fixtures=%s", len(fixtures))
 
     raw_floor_direct = {
-        fixture.id: compute_direct_matrix(fixture, floor_patches, "floor", patch_size=PATCH_SIZE)
+        fixture.id: compute_direct_matrix(fixture, floor_patches, "floor", patch_size=floor_cell)
         for fixture in fixtures
     }
     raw_wall_direct: dict[str, dict[str, Matrix]] = {wall.id: {} for wall in room.walls}
@@ -85,7 +83,7 @@ def calculate(payload: CalculateRequest, ies_text: str) -> CalculateResponse:
             floor_patches,
             REFLECTANCE_FACTOR,
             source_wall_id=wall.id,
-            patch_size=PATCH_SIZE,
+            patch_size=floor_cell,
         )
 
     raw_total = sum_matrices([*raw_floor_direct.values(), *raw_indirect.values()])
