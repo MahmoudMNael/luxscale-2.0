@@ -58,7 +58,9 @@ def calculate(payload: CalculateRequest, ies_text: str) -> CalculateResponse:
     _log.info("fixtures=%s", len(fixtures))
 
     raw_floor_direct = {
-        fixture.id: compute_direct_matrix(fixture, floor_patches, "floor", patch_size=floor_cell)
+        fixture.id: compute_direct_matrix(
+            fixture, floor_patches, "floor", patch_size=floor_cell, room_polygon=room.polygon
+        )
         for fixture in fixtures
     }
     raw_wall_direct: dict[str, dict[str, Matrix]] = {wall.id: {} for wall in room.walls}
@@ -70,6 +72,7 @@ def calculate(payload: CalculateRequest, ies_text: str) -> CalculateResponse:
                 "wall",
                 patch_size=PATCH_SIZE,
                 wall_id=wall.id,
+                room_polygon=room.polygon,
             )
 
     raw_indirect: dict[str, Matrix] = {}
@@ -93,6 +96,7 @@ def calculate(payload: CalculateRequest, ies_text: str) -> CalculateResponse:
             floor_patches,
             WALL_REFLECTANCE_FACTOR,
             NUM_BOUNCES,
+            room.polygon,
         )
         for wall in room.walls:
             raw_indirect[wall.id] = Matrix(

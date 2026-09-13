@@ -5,7 +5,7 @@ import math
 from app.domain.models import Fixture, Matrix, Patch, RayGeometry, Vec3
 from app.services.fixture_service import luminous_opening
 from app.services.ies_service import get_candela
-from app.services.vector_math import EPS, angle_deg, wrap_deg
+from app.services.vector_math import EPS, Vec2, angle_deg, is_convex_polygon, segment_inside_room, visibility_room_polygon, wrap_deg
 
 
 def compute_ray_geometry(fixture: Fixture, patch: Patch, source: Vec3 | None = None) -> RayGeometry:
@@ -35,11 +35,20 @@ def compute_ray_geometry(fixture: Fixture, patch: Patch, source: Vec3 | None = N
     return RayGeometry(distance, theta_source, phi_source, theta_incidence)
 
 
-def compute_direct_illuminance(fixture: Fixture, patch: Patch) -> float:
+def compute_direct_illuminance(
+    fixture: Fixture, patch: Patch, room_polygon: list[Vec2] | None = None
+) -> float:
     _, elements = luminous_opening(fixture)
     n = len(elements)
+    vis_room = visibility_room_polygon(room_polygon) if room_polygon is not None else None
+    blocked_room = vis_room is not None and not is_convex_polygon(room_polygon)
     total = 0.0
     for origin in elements:
+        if blocked_room:
+            if not segment_inside_room(
+                (origin[0], origin[1]), (patch.center[0], patch.center[1]), vis_room
+            ):
+                continue
         ray = compute_ray_geometry(fixture, patch, origin)
         if ray.distance < EPS or ray.theta_incidence >= 90.0:
             continue
@@ -55,6 +64,7 @@ def compute_direct_matrix(
     *,
     patch_size: float,
     wall_id: str | None = None,
+    room_polygon: list[Vec2] | None = None,
 ) -> Matrix:
     metadata: dict = {
         "kind": "direct",
@@ -64,4 +74,8 @@ def compute_direct_matrix(
     }
     if wall_id is not None:
         metadata["wallId"] = wall_id
-    return Matrix([compute_direct_illuminance(fixture, patch) for patch in patches], metadata)
+    if room_polygon is not None:
+        metadata["occlusion"] = "room-polygon"
+    return Matrix(
+        [compute_direct_illuminance(fixture, patch, room_polygon) for patch in patches], metadata
+    )

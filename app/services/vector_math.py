@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import math
 
-from shapely.geometry import GeometryCollection, MultiPolygon, Point, Polygon, box
+from shapely.geometry import GeometryCollection, LineString, MultiPolygon, Point, Polygon, box
 from shapely.geometry.base import BaseGeometry
+from shapely.prepared import prep
 
 EPS = 1e-9
 Vec2 = tuple[float, float]
@@ -120,3 +121,35 @@ def clip_rect_to_polygon(rect: tuple[float, float, float, float], polygon: list[
     if xmax - xmin < EPS or ymax - ymin < EPS:
         return []
     return _rings(box(xmin, ymin, xmax, ymax).intersection(_room(polygon)))
+
+
+def room_polygon(polygon: list[Vec2]) -> Polygon:
+    """Prepared-room polygon for visibility tests (buffer(0) cleans bowties)."""
+    return _room(polygon)
+
+
+def is_convex_polygon(polygon: list[Vec2]) -> bool:
+    """Fast path: convex rooms never occlude, so skip segment tests."""
+    poly = _room(polygon)
+    if poly.is_empty:
+        return True
+    return bool(poly.equals(poly.convex_hull))
+
+
+def segment_inside_room(a: Vec2, b: Vec2, room: Polygon | list[Vec2]) -> bool:
+    """True when the plan-view segment stays inside the room (walls block otherwise)."""
+    poly = _room(room) if isinstance(room, list) else room
+    if poly.is_empty:
+        return False
+    return bool(prep(poly).covers(LineString([a, b])))
+
+
+def visibility_room_polygon(polygon: list[Vec2]) -> Polygon:
+    """Room polygon with small outward buffer for wall-patch boundary tolerance.
+
+    Wall patch centres sit exactly on the room boundary.  A zero-buffer check
+    can reject legitimate wall→floor segments starting there due to
+    floating-point noise.  A tiny outward buffer (1 mm) absorbs this without
+    changing the geometry for any real occlusion test.
+    """
+    return _room(polygon).buffer(1e-3, join_style=2, mitre_limit=5.0)

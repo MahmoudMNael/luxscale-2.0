@@ -6,7 +6,7 @@ import numpy as np
 
 from app.domain.exceptions import GeometryError
 from app.domain.models import Matrix, Patch
-from app.services.vector_math import EPS, angle_deg
+from app.services.vector_math import EPS, Vec2, angle_deg, is_convex_polygon, room_polygon, segment_inside_room, visibility_room_polygon
 
 
 def form_factor(source_patch: Patch, target_patch: Patch) -> float:
@@ -53,11 +53,38 @@ def compute_indirect_contribution(
     ) / (math.pi * distance**2)
 
 
+def _wall_floor_visibility(
+    wall_patches: list[Patch],
+    floor_patches: list[Patch],
+    polygon: list[Vec2],
+) -> "np.ndarray | None":
+    """Precompute wall->floor plan-view visibility. None = all visible (convex)."""
+    import numpy as np
+
+    if not wall_patches or not floor_patches:
+        return None
+    if is_convex_polygon(polygon):
+        return None
+    room = visibility_room_polygon(polygon)
+    n_wall = len(wall_patches)
+    n_floor = len(floor_patches)
+    vis = np.ones((n_wall, n_floor), dtype=bool)
+    for j, target in enumerate(floor_patches):
+        tx, ty = target.center[0], target.center[1]
+        for i, source in enumerate(wall_patches):
+            if not segment_inside_room(
+                (source.center[0], source.center[1]), (tx, ty), room
+            ):
+                vis[i, j] = False
+    return vis
+
+
 def compute_bounce_values(
     source_patches: list[Patch],
     source_values: list[float] | np.ndarray,
     target_patches: list[Patch],
     reflectance: float,
+    room_polygon: list[Vec2] | None = None,
 ) -> list[float]:
     if len(source_values) != len(source_patches):
         raise GeometryError("Cannot sum matrices with different patch layouts.")
@@ -67,8 +94,13 @@ def compute_bounce_values(
     src_n = np.array([p.normal for p in source_patches], dtype=np.float64)
     src_a = np.array([p.area for p in source_patches], dtype=np.float64)
     e_src = np.asarray(source_values, dtype=np.float64)
+    vis = (
+        _wall_floor_visibility(source_patches, target_patches, room_polygon)
+        if room_polygon is not None
+        else None
+    )
     out: list[float] = []
-    for target in target_patches:
+    for j, target in enumerate(target_patches):
         tgt = np.array(target.center, dtype=np.float64)
         tgt_n = np.array(target.normal, dtype=np.float64)
         line = tgt - src_c
@@ -78,6 +110,8 @@ def compute_bounce_values(
         cos1 = (line * src_n).sum(axis=1) / d
         cos2 = -(line * tgt_n).sum(axis=1) / d
         ok = valid & (cos1 > 0.0) & (cos2 > 0.0) & (e_src != 0.0)
+        if vis is not None:
+            ok = ok & vis[:, j]
         if not bool(ok.any()):
             out.append(0.0)
             continue
@@ -117,6 +151,7 @@ def compute_indirect_floor_per_origin(
     floor_patches: list[Patch],
     wall_reflectance: float,
     num_bounces: int,
+    room_polygon: list[Vec2] | None = None,
 ) -> dict[str, list[float]]:
     interact = sorted(origin_seeds)
     n_wall = len(all_wall_patches)
@@ -136,6 +171,11 @@ def compute_indirect_floor_per_origin(
 
     cur = np.array([origin_seeds[wall_id] for wall_id in interact], dtype=np.float64)
     accum = np.zeros((len(interact), len(floor_patches)), dtype=np.float64)
+    vis = (
+        _wall_floor_visibility(all_wall_patches, floor_patches, room_polygon)
+        if room_polygon is not None
+        else None
+    )
 
     for _ in range(num_bounces):
         for j in range(len(floor_patches)):
@@ -146,6 +186,8 @@ def compute_indirect_floor_per_origin(
             cos1 = (line * src_n).sum(axis=1) / d
             cos2 = -(line * floor_n[j]).sum(axis=1) / d
             ok = valid & (cos1 > 0.0) & (cos2 > 0.0)
+            if vis is not None:
+                ok = ok & vis[:, j]
             if not bool(ok.any()):
                 continue
             g = np.zeros_like(d2)
