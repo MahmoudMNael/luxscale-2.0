@@ -59,5 +59,11 @@ class CalculateResponse(BaseModel):
         ...,
         description="wallId → fixtureId → matrix",
     )
-    indirectFloorMatrices: dict[str, MatrixDto] = Field(..., description="wallId → matrix")
+    indirectFloorMatrices: dict[str, MatrixDto] = Field(
+        ...,
+        description="wallId → floor matrix from wall interreflection (walls only; floor/ceiling never re-emit), "
+        "summed over all bounces originating from that wall",
+    )
     totalFloorIlluminance: MatrixDto
+    bounces: int = Field(..., description="Applied wall bounces (app_settings.NUM_BOUNCES)")
+    wallReflectance: float = Field(..., description="Applied wall reflectance (app_settings.WALL_REFLECTANCE_FACTOR)")

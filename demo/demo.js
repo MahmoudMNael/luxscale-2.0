@@ -492,7 +492,9 @@ function rebuildLayers() {
     layers.push({ id: `df-${fid}`, label: `Direct floor · ${fid}`, matrix, patches: result.floorPatches });
   }
   for (const [wid, matrix] of Object.entries(result.indirectFloorMatrices)) {
-    layers.push({ id: `if-${wid}`, label: `Indirect floor · ${wid}`, matrix, patches: result.floorPatches });
+    const b = matrix.metadata?.bounces ?? "?";
+    const r = matrix.metadata?.wallReflectance ?? "?";
+    layers.push({ id: `if-${wid}`, label: `Indirect floor · ${wid} · ${b} bounces · ρ=${r}`, matrix, patches: result.floorPatches });
   }
   els.floorLayer.innerHTML = layers.map((l) => `<option value="${l.id}">${l.label}</option>`).join("");
   els.floorLayer.disabled = false;
@@ -526,7 +528,7 @@ function renderAll() {
   const zBit = Number.isFinite(z) ? ` · work plane z=${z.toFixed(2)}` : "";
   const minBit = s.kept ? `min ${s.min.toFixed(1)} @ ${fmtXY(result.floorPatches[s.minI].center)}` : "min —";
   const maxBit = s.kept ? `max ${s.max.toFixed(1)} @ ${fmtXY(result.floorPatches[s.maxI].center)}` : "max —";
-  els.stats.textContent = `${result.fixtures.length} fixtures · kept ${s.kept} / ${result.floorPatches.length}${zBit} · ${layer.label} ${minBit} / avg ${s.avg.toFixed(1)} / ${maxBit} lux`;
+  els.stats.textContent = `${result.fixtures.length} fixtures · ${result.bounces ?? "?"} bounces · ρ=${result.wallReflectance ?? "?"} · kept ${s.kept} / ${result.floorPatches.length}${zBit} · ${layer.label} ${minBit} / avg ${s.avg.toFixed(1)} / ${maxBit} lux`;
   drawPlan(layer.matrix, s, kept);
   dialuxCompare(values);
 

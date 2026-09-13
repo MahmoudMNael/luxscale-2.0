@@ -46,6 +46,7 @@ def en12464_spacing(d: float) -> float:
     if d <= EPS:
         return 0.0
     return 0.2 * 5.0 ** math.log10(d)
+    # return 0.4
 
 
 def _room(polygon: list[Vec2]) -> Polygon:

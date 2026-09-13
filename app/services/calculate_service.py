@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import time
 
-from app.app_settings import FLOOR_BORDER, MAINTENANCE_FACTOR, PATCH_SIZE, REFLECTANCE_FACTOR, WORK_PLANE_HEIGHT
+from app.app_settings import FLOOR_BORDER, MAINTENANCE_FACTOR, NUM_BOUNCES, PATCH_SIZE, WALL_REFLECTANCE_FACTOR, WORK_PLANE_HEIGHT
 from app.domain.exceptions import GeometryError
 from app.domain.models import Fixture, FloorSurface, Matrix, Patch, Vec3, WallSurface
 from app.schemas.calculate import CalculateRequest, CalculateResponse, FixtureDto
@@ -13,7 +13,7 @@ from app.services.direct_illuminance_service import compute_direct_matrix
 from app.services.fixture_service import generate_fixture_grid, luminous_opening
 from app.services.geometry_service import define_room, generate_patches
 from app.services.ies_service import load_ies
-from app.services.indirect_illuminance_service import compute_indirect_matrix_from_wall
+from app.services.indirect_illuminance_service import compute_indirect_floor_per_origin
 from app.services.matrix_service import apply_maintenance_factor, sum_matrices
 
 _log = logging.getLogger(__name__)
@@ -75,19 +75,56 @@ def calculate(payload: CalculateRequest, ies_text: str) -> CalculateResponse:
             )
 
     raw_indirect: dict[str, Matrix] = {}
-    for wall in room.walls:
-        total_wall = sum_matrices(list(raw_wall_direct[wall.id].values()))
-        raw_indirect[wall.id] = compute_indirect_matrix_from_wall(
-            wall_patches[wall.id],
-            total_wall,
+    if fixtures and NUM_BOUNCES > 0:
+        all_wall_patches: list[Patch] = [p for wall in room.walls for p in wall_patches[wall.id]]
+        offsets: dict[str, int] = {}
+        pos = 0
+        for wall in room.walls:
+            offsets[wall.id] = pos
+            pos += len(wall_patches[wall.id])
+        seeds: dict[str, list[float]] = {}
+        for wall in room.walls:
+            total_wall = sum_matrices(list(raw_wall_direct[wall.id].values()))
+            seed = [0.0] * len(all_wall_patches)
+            start = offsets[wall.id]
+            seed[start : start + len(total_wall.values)] = list(total_wall.values)
+            seeds[wall.id] = seed
+        per_origin = compute_indirect_floor_per_origin(
+            all_wall_patches,
+            seeds,
             floor_patches,
-            REFLECTANCE_FACTOR,
-            source_wall_id=wall.id,
-            patch_size=floor_cell,
+            WALL_REFLECTANCE_FACTOR,
+            NUM_BOUNCES,
         )
+        for wall in room.walls:
+            raw_indirect[wall.id] = Matrix(
+                per_origin[wall.id],
+                {
+                    "kind": "indirect",
+                    "surfaceType": "floor",
+                    "sourceWallId": wall.id,
+                    "patchSize": floor_cell,
+                    "bounces": NUM_BOUNCES,
+                    "wallReflectance": WALL_REFLECTANCE_FACTOR,
+                },
+            )
+    else:
+        for wall in room.walls:
+            raw_indirect[wall.id] = Matrix(
+                [0.0] * len(floor_patches),
+                {
+                    "kind": "indirect",
+                    "surfaceType": "floor",
+                    "sourceWallId": wall.id,
+                    "patchSize": floor_cell,
+                    "bounces": 0,
+                    "wallReflectance": WALL_REFLECTANCE_FACTOR,
+                },
+            )
 
     raw_total = sum_matrices([*raw_floor_direct.values(), *raw_indirect.values()])
     mf = MAINTENANCE_FACTOR
+    applied_bounces = NUM_BOUNCES if fixtures and NUM_BOUNCES > 0 else 0
     response = CalculateResponse(
         fixtures=[_fixture(fixture) for fixture in fixtures],
         floorPatches=[_patch(p) for p in floor_patches],
@@ -99,8 +136,15 @@ def calculate(payload: CalculateRequest, ies_text: str) -> CalculateResponse:
         },
         indirectFloorMatrices={wid: _matrix(apply_maintenance_factor(m, mf)) for wid, m in raw_indirect.items()},
         totalFloorIlluminance=_matrix(apply_maintenance_factor(raw_total, mf)),
+        bounces=applied_bounces,
+        wallReflectance=WALL_REFLECTANCE_FACTOR,
     )
-    _log.info("success duration_ms=%.1f", (time.perf_counter() - started) * 1000)
+    _log.info(
+        "success duration_ms=%.1f bounces=%s wall_reflectance=%s",
+        (time.perf_counter() - started) * 1000,
+        applied_bounces,
+        WALL_REFLECTANCE_FACTOR,
+    )
     return response
 
 
