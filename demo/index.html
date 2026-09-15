@@ -10,7 +10,7 @@
   <header class="top">
     <div>
       <h1>LuxScale</h1>
-      <p class="muted">Illuminance demo — floor plan, fixtures, every returned matrix (walls-only bounces, server-side)</p>
+      <p class="muted">Illuminance demo — floor plan, fixtures, every returned matrix (full radiosity: walls + floor + ceiling, server-side)</p>
     </div>
     <a class="docs" href="/docs" target="_blank" rel="noreferrer">OpenAPI</a>
   </header>
@@ -21,7 +21,17 @@
 
       <label>Room height (m)
         <input id="height" type="number" min="0.01" step="0.01" value="4" required />
-        <span class="hint">Room height. Calculation surface height is set below.</span>
+        <span class="hint">Room height. Used as the default when ceiling / mounting heights are left empty.</span>
+      </label>
+
+      <label>Ceiling height (m)
+        <input id="ceilingHeight" type="number" min="0.01" step="0.01" placeholder="= room height" />
+        <span class="hint">Ceiling plane. Walls extend to this. Empty = room height.</span>
+      </label>
+
+      <label>Mounting height (m)
+        <input id="mountingHeight" type="number" min="0.01" step="0.01" placeholder="= ceiling height" />
+        <span class="hint">Fixture plane (e.g. pendant drop). Must be ≤ ceiling and above the work plane.</span>
       </label>
 
       <label>Work plane height (m)
@@ -32,6 +42,11 @@
       <label>Wall zone (m)
         <input id="wallZone" type="number" min="0" step="0.05" value="0.25" required />
         <span class="hint">DIALux boundary zone. EN 12464 points exclude this strip; must match Dialux to compare Emin.</span>
+      </label>
+
+      <label>Luminaire rotation (°)
+        <input id="luminaireRotation" type="number" min="0" max="360" step="1" placeholder="0" />
+        <span class="hint">In-room rotation of the housing. Empty = 0 (as placed).</span>
       </label>
 
       <fieldset>
@@ -107,7 +122,8 @@
         </aside>
       </div>
 
-      <h2>Walls</h2>
+      <h2>Walls, floor &amp; ceiling</h2>
+      <p class="hint">Wall cards show summed direct illuminance per wall (unrolled elevation). Floor / ceiling cards show summed direct illuminance in plan view.</p>
       <div id="walls" class="walls"></div>
 
       <h2>Matrices</h2>

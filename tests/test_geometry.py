@@ -109,6 +109,18 @@ def test_wall_patches_equal_fit():
     assert len({round(p.area, 9) for p in patches}) == 1
 
 
+def test_subdivide_wall_patches_maps_onto_coarse():
+    from app.services.geometry_service import subdivide_wall_patches
+
+    wall = WallSurface("W1", (0.0, 0.0), (4.25, 0.0), 3.0, (0.0, 1.0))
+    coarse = generate_patches(wall, 0.5, plane_z=0.0)
+    fine, coarse_idx = subdivide_wall_patches(coarse, wall)
+    assert len(fine) == 4 * len(coarse)
+    assert sorted(coarse_idx) == [i for i in range(len(coarse)) for _ in range(4)]
+    assert coarse_idx[0] == 0
+    assert coarse_idx[-1] == len(coarse) - 1
+
+
 def test_zero_area_polygon_fails():
     try:
         define_room([(0, 0), (1, 0), (2, 0)], height=3)

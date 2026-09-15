@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 
 from app.domain.exceptions import GeometryError
-from app.domain.models import FloorSurface, Patch, Room, Wall, WallSurface
+from app.domain.models import CeilingSurface, FloorSurface, Patch, Room, Wall, WallSurface
 from app.services.vector_math import (
     EPS,
     en12464_spacing,
@@ -53,7 +53,7 @@ def define_room(vertices: list[Vec2], height: float, step: float = 1.0) -> Room:
 
 
 def generate_patches(
-    surface: FloorSurface | WallSurface,
+    surface: FloorSurface | CeilingSurface | WallSurface,
     patch_size: float | None = None,
     *,
     plane_z: float,
@@ -61,12 +61,39 @@ def generate_patches(
 ) -> list[Patch]:
     if isinstance(surface, FloorSurface):
         return _floor_patches(surface, plane_z, border)
+    if isinstance(surface, CeilingSurface):
+        return _ceiling_patches(surface, plane_z, border)
     size = 1.0 if patch_size is None else patch_size
     return _wall_patches(surface, size)
 
 
 def _floor_patches(surface: FloorSurface, plane_z: float, border: float) -> list[Patch]:
     patches, _ = generate_floor_evaluation_grid(surface.polygon, plane_z, border)
+    return patches
+
+
+def generate_ceiling_evaluation_grid(
+    polygon: list[Vec2], plane_z: float, border: float
+) -> tuple[list[Patch], dict[str, float]]:
+    patches, meta = generate_floor_evaluation_grid(polygon, plane_z, border)
+    ceiling: list[Patch] = []
+    for i, p in enumerate(patches):
+        ceiling.append(
+            Patch(
+                id=f"ceiling-{i}",
+                surface_type="ceiling",
+                parent_id="ceiling",
+                center=(p.center[0], p.center[1], plane_z),
+                normal=(0.0, 0.0, -1.0),
+                area=p.area,
+                size=p.size,
+            )
+        )
+    return ceiling, meta
+
+
+def _ceiling_patches(surface: CeilingSurface, plane_z: float, border: float) -> list[Patch]:
+    patches, _ = generate_ceiling_evaluation_grid(surface.polygon, plane_z, border)
     return patches
 
 
@@ -151,3 +178,52 @@ def _wall_patches(surface: WallSurface, size: float) -> list[Patch]:
             )
             n += 1
     return patches
+
+
+def subdivide_wall_patches(
+    coarse: list[Patch],
+    surface: WallSurface,
+    factor: int = 2,
+) -> tuple[list[Patch], list[int]]:
+    """Split each coarse wall cell into factor×factor sub-cells.
+
+    Returns the fine patches plus the coarse index of each fine patch, so
+    fine direct values area-average exactly back onto the radiosity layout.
+    """
+    if factor < 2 or not coarse:
+        return list(coarse), list(range(len(coarse)))
+    dx = surface.end[0] - surface.start[0]
+    dy = surface.end[1] - surface.start[1]
+    length = norm((dx, dy))
+    if length < EPS:
+        raise GeometryError(f"Wall {surface.wall_id} has zero length.")
+    ux, uy = dx / length, dy / length
+    zs = sorted({round(p.center[2], 9) for p in coarse})
+    nz = len(zs)
+    ns = len(coarse) // nz if nz else len(coarse)
+    if ns <= 0 or nz <= 0 or ns * nz != len(coarse):
+        return list(coarse), list(range(len(coarse)))
+    ds, dz = length / ns, surface.height / nz
+    fine: list[Patch] = []
+    coarse_idx: list[int] = []
+    n = 0
+    for ci in range(len(coarse)):
+        iz, is_ = divmod(ci, ns)
+        for fz in range(factor):
+            for fs in range(factor):
+                s_mid = (is_ + (fs + 0.5) / factor) * ds
+                z_mid = (iz + (fz + 0.5) / factor) * dz
+                fine.append(
+                    Patch(
+                        id=f"{surface.wall_id}-{ci}-{n}",
+                        surface_type="wall",
+                        parent_id=surface.wall_id,
+                        center=(surface.start[0] + ux * s_mid, surface.start[1] + uy * s_mid, z_mid),
+                        normal=(surface.normal[0], surface.normal[1], 0.0),
+                        area=ds * dz / (factor * factor),
+                        size=max(ds, dz) / factor,
+                    )
+                )
+                coarse_idx.append(ci)
+                n += 1
+    return fine, coarse_idx

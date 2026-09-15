@@ -145,3 +145,42 @@ def test_demo_sample_ies_opening():
     assert 0.5 < profile.flux_scale < 2.0
     _, elements = luminous_opening(_downlight(profile, z=3.0 - profile.height / 2.0))
     assert len(elements) == 9
+
+
+def _off_axis_patch() -> Patch:
+    return Patch(
+        id="q",
+        surface_type="floor",
+        parent_id="floor",
+        center=(1.0, 0.0, 0.0),
+        normal=(0.0, 0.0, 1.0),
+        area=1.0,
+        size=1.0,
+    )
+
+
+def test_c0_offset_default_is_zero():
+    profile = load_ies(_DEMO_IES.read_text())
+    fix = _downlight(profile)
+    assert compute_direct_illuminance(fix, _off_axis_patch()) == pytest.approx(
+        compute_direct_illuminance(fix, _off_axis_patch(), c0_offset_deg=0.0)
+    )
+
+
+def test_c0_offset_shifts_asymmetric_direct():
+    profile = load_ies(_DEMO_IES.read_text())
+    fix = _downlight(profile)
+    patch = _off_axis_patch()
+    e0 = compute_direct_illuminance(fix, patch, c0_offset_deg=0.0)
+    e90 = compute_direct_illuminance(fix, patch, c0_offset_deg=90.0)
+    assert e0 > 0 and e90 > 0
+    assert e90 != pytest.approx(e0)
+
+
+def test_c0_offset_irrelevant_for_symmetric_profile():
+    profile = load_ies(SAMPLE_IES)
+    fix = _downlight(profile)
+    patch = _off_axis_patch()
+    assert compute_direct_illuminance(fix, patch, c0_offset_deg=90.0) == pytest.approx(
+        compute_direct_illuminance(fix, patch, c0_offset_deg=0.0)
+    )

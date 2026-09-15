@@ -465,6 +465,24 @@ function drawWall(canvas, patches, values) {
   });
 }
 
+function drawPlanMini(canvas, patches, values) {
+  const ctx = canvas.getContext("2d");
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  if (!patches.length || !values.length) return;
+  const { min, max } = stats(values);
+  const span = max - min || 1;
+  const pts = patches.map((p) => p.center);
+  const b = boundsOf(pts);
+  const to = mapper(canvas, b);
+  patches.forEach((p, i) => {
+    const half = p.size / 2;
+    const a = to(p.center.x - half, p.center.y - half);
+    const c = to(p.center.x + half, p.center.y + half);
+    ctx.fillStyle = luxColor((values[i] - min) / span);
+    ctx.fillRect(a.x, c.y, Math.max(c.x - a.x, 2), Math.max(a.y - c.y, 2));
+  });
+}
+
 function matrixTable(title, matrix, patches) {
   const rows = matrix.values
     .map((v, i) => {
@@ -493,8 +511,10 @@ function rebuildLayers() {
   }
   for (const [wid, matrix] of Object.entries(result.indirectFloorMatrices)) {
     const b = matrix.metadata?.bounces ?? "?";
-    const r = matrix.metadata?.wallReflectance ?? "?";
-    layers.push({ id: `if-${wid}`, label: `Indirect floor · ${wid} · ${b} bounces · ρ=${r}`, matrix, patches: result.floorPatches });
+    const rw = matrix.metadata?.wallReflectance ?? result.wallReflectance ?? "?";
+    const rf = matrix.metadata?.floorReflectance ?? result.floorReflectance ?? "?";
+    const rc = matrix.metadata?.ceilingReflectance ?? result.ceilingReflectance ?? "?";
+    layers.push({ id: `if-${wid}`, label: `Indirect floor · ${wid} · ${b} bounces · ρw=${rw} ρf=${rf} ρc=${rc}`, matrix, patches: result.floorPatches });
   }
   els.floorLayer.innerHTML = layers.map((l) => `<option value="${l.id}">${l.label}</option>`).join("");
   els.floorLayer.disabled = false;
@@ -532,7 +552,7 @@ function renderAll() {
   const zBit = Number.isFinite(z) ? ` · work plane z=${z.toFixed(2)}` : "";
   const minBit = s.kept ? `min ${s.min.toFixed(1)} @ ${fmtXY(result.floorPatches[s.minI].center)}` : "min —";
   const maxBit = s.kept ? `max ${s.max.toFixed(1)} @ ${fmtXY(result.floorPatches[s.maxI].center)}` : "max —";
-  els.stats.textContent = `${result.fixtures.length} fixtures · ${result.bounces ?? "?"} bounces · ρ=${result.wallReflectance ?? "?"} · kept ${s.kept} / ${result.floorPatches.length}${zBit}${evBit} · ${layer.label} ${minBit} / avg ${s.avg.toFixed(1)} / ${maxBit} lux`;
+  els.stats.textContent = `${result.fixtures.length} fixtures · ${result.bounces ?? "?"} bounces · ρw=${result.wallReflectance ?? "?"} ρf=${result.floorReflectance ?? "?"} ρc=${result.ceilingReflectance ?? "?"} · ceil ${result.ceilingHeight ?? "?"} m · mount ${result.mountingHeight ?? "?"} m · kept ${s.kept} / ${result.floorPatches.length}${zBit}${evBit} · ${layer.label} ${minBit} / avg ${s.avg.toFixed(1)} / ${maxBit} lux`;
   drawPlan(layer.matrix, s, kept);
   dialuxCompare(values);
 
@@ -547,9 +567,37 @@ function renderAll() {
     drawWall(card.querySelector("canvas"), patches, total.values);
   }
 
+  if ((result.floorPatches || []).length) {
+    const total = sumMatrices(Object.values(result.directFloorMatrices || {}));
+    if (total.values.length) {
+      const { avg } = stats(total.values);
+      const card = document.createElement("div");
+      card.className = "wall-card";
+      card.innerHTML = `<strong>Floor (direct)</strong> · ${result.floorPatches.length} patches · avg ${avg.toFixed(1)} lux<canvas width="320" height="160"></canvas>`;
+      els.walls.appendChild(card);
+      drawPlanMini(card.querySelector("canvas"), result.floorPatches, total.values);
+    }
+  }
+
+  const ceilingPatches = result.ceilingPatches || [];
+  if (ceilingPatches.length) {
+    const total = sumMatrices(Object.values(result.directCeilingMatrices || {}));
+    if (total.values.length) {
+      const { avg } = stats(total.values);
+      const card = document.createElement("div");
+      card.className = "wall-card";
+      card.innerHTML = `<strong>Ceiling (direct)</strong> · ${ceilingPatches.length} patches · avg ${avg.toFixed(1)} lux<canvas width="320" height="160"></canvas>`;
+      els.walls.appendChild(card);
+      drawPlanMini(card.querySelector("canvas"), ceilingPatches, total.values);
+    }
+  }
+
   const blocks = [matrixTable("totalFloorIlluminance", result.totalFloorIlluminance, result.floorPatches)];
   for (const [fid, matrix] of Object.entries(result.directFloorMatrices)) {
     blocks.push(matrixTable(`directFloorMatrices[${fid}]`, matrix, result.floorPatches));
+  }
+  for (const [fid, matrix] of Object.entries(result.directCeilingMatrices || {})) {
+    blocks.push(matrixTable(`directCeilingMatrices[${fid}]`, matrix, ceilingPatches));
   }
   for (const [wid, matrix] of Object.entries(result.indirectFloorMatrices)) {
     blocks.push(matrixTable(`indirectFloorMatrices[${wid}]`, matrix, result.floorPatches));
@@ -587,7 +635,13 @@ function showStatus(text, kind) {
 }
 
 function payload() {
-  return {
+  const opt = (id) => {
+    const raw = document.getElementById(id).value;
+    if (raw === "" || raw == null) return null;
+    const v = Number(raw);
+    return Number.isFinite(v) ? v : null;
+  };
+  const body = {
     polygon: vertices.map((v) => ({ x: v.x, y: v.y })),
     height: num("height"),
     workPlaneHeight: num("workPlaneHeight"),
@@ -597,6 +651,13 @@ function payload() {
       y: { spacing: num("ySpacing"), offsetBeginning: num("yOffB"), offsetEnding: num("yOffE") },
     },
   };
+  const ceiling = opt("ceilingHeight");
+  const mounting = opt("mountingHeight");
+  if (ceiling != null) body.ceilingHeight = ceiling;
+  if (mounting != null) body.mountingHeight = mounting;
+  const rot = opt("luminaireRotation");
+  if (rot != null) body.luminaireRotation = rot;
+  return body;
 }
 
 async function iesBlob() {

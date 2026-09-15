@@ -128,6 +128,16 @@ def room_polygon(polygon: list[Vec2]) -> Polygon:
     return _room(polygon)
 
 
+def visibility_polygon(polygon: list[Vec2], tol: float = 3e-3) -> Polygon:
+    """Room polygon with small outward buffer for boundary-tolerance checks.
+
+    Wall patch centres sit on the room boundary.  ``covers(LineString(...))``
+    can reject legitimate segments starting there due to floating-point noise.
+    A small outward buffer absorbs this without changing real occlusion.
+    """
+    return _room(polygon).buffer(tol, join_style=2, mitre_limit=5.0)
+
+
 def is_convex_polygon(polygon: list[Vec2]) -> bool:
     """Fast path: convex rooms never occlude, so skip segment tests."""
     poly = _room(polygon)
@@ -143,13 +153,3 @@ def segment_inside_room(a: Vec2, b: Vec2, room: Polygon | list[Vec2]) -> bool:
         return False
     return bool(prep(poly).covers(LineString([a, b])))
 
-
-def visibility_room_polygon(polygon: list[Vec2]) -> Polygon:
-    """Room polygon with small outward buffer for wall-patch boundary tolerance.
-
-    Wall patch centres sit exactly on the room boundary.  A zero-buffer check
-    can reject legitimate wall→floor segments starting there due to
-    floating-point noise.  A tiny outward buffer (1 mm) absorbs this without
-    changing the geometry for any real occlusion test.
-    """
-    return _room(polygon).buffer(1e-3, join_style=2, mitre_limit=5.0)

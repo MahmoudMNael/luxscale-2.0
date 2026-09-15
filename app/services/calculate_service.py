@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import time
 
-from app.app_settings import FLOOR_BORDER, MAINTENANCE_FACTOR, NUM_BOUNCES, PATCH_SIZE, WALL_REFLECTANCE_FACTOR, WORK_PLANE_HEIGHT
+from app.app_settings import C0_ORIENTATION_OFFSET_DEG, CEILING_REFLECTANCE_FACTOR, FLOOR_BORDER, FLOOR_REFLECTANCE_FACTOR, MAINTENANCE_FACTOR, NUM_BOUNCES, PATCH_SIZE, WALL_REFLECTANCE_FACTOR, WORK_PLANE_HEIGHT
 from app.domain.exceptions import GeometryError
 from app.domain.models import Fixture, Matrix, Patch, Vec3, WallSurface
 from app.schemas.calculate import CalculateRequest, CalculateResponse, EvaluationDto, FixtureDto
@@ -11,7 +11,7 @@ from app.schemas.geometry import PatchDto, Vec3Dto
 from app.schemas.matrix import MatrixDto
 from app.services.direct_illuminance_service import compute_direct_matrix
 from app.services.fixture_service import generate_fixture_grid, luminous_opening
-from app.services.geometry_service import define_room, generate_floor_evaluation_grid, generate_patches
+from app.services.geometry_service import define_room, generate_ceiling_evaluation_grid, generate_floor_evaluation_grid, generate_patches, subdivide_wall_patches
 from app.services.ies_service import load_ies
 from app.services.indirect_illuminance_service import compute_indirect_floor_per_origin
 from app.services.matrix_service import apply_maintenance_factor, sum_matrices
@@ -21,10 +21,19 @@ _log = logging.getLogger(__name__)
 
 def calculate(payload: CalculateRequest, ies_text: str) -> CalculateResponse:
     started = time.perf_counter()
+    ceiling_h = payload.ceilingHeight if payload.ceilingHeight is not None else payload.height
+    mount_h = payload.mountingHeight if payload.mountingHeight is not None else ceiling_h
+    work_z = payload.workPlaneHeight if payload.workPlaneHeight is not None else WORK_PLANE_HEIGHT
+    if mount_h > ceiling_h + 1e-9:
+        raise GeometryError("Mounting height cannot exceed ceiling height.")
+    if work_z >= mount_h:
+        raise GeometryError("Work plane height must be below the fixture mounting height.")
     _log.info(
-        "start vertices=%s height=%s spacing=(%s,%s) offsets_x=(%s,%s) offsets_y=(%s,%s)",
+        "start vertices=%s height=%s ceiling=%s mounting=%s spacing=(%s,%s) offsets_x=(%s,%s) offsets_y=(%s,%s)",
         len(payload.polygon),
         payload.height,
+        ceiling_h,
+        mount_h,
         payload.grid.x.spacing,
         payload.grid.y.spacing,
         payload.grid.x.offset_beginning,
@@ -32,8 +41,7 @@ def calculate(payload: CalculateRequest, ies_text: str) -> CalculateResponse:
         payload.grid.y.offset_beginning,
         payload.grid.y.offset_ending,
     )
-    room = define_room([(p.x, p.y) for p in payload.polygon], payload.height, step=PATCH_SIZE)
-    work_z = payload.workPlaneHeight if payload.workPlaneHeight is not None else WORK_PLANE_HEIGHT
+    room = define_room([(p.x, p.y) for p in payload.polygon], ceiling_h, step=PATCH_SIZE)
     wall_zone = payload.wallZone if payload.wallZone is not None else FLOOR_BORDER
     floor_patches, grid_meta = generate_floor_evaluation_grid(room.polygon, work_z, wall_zone)
     if not floor_patches:
@@ -47,67 +55,123 @@ def calculate(payload: CalculateRequest, ies_text: str) -> CalculateResponse:
         for wall in room.walls
     }
     floor_cell = floor_patches[0].size
+    ceiling_patches, _ = generate_ceiling_evaluation_grid(room.polygon, ceiling_h, 0.0)
     _log.info(
-        "geometry walls=%s floor_patches=%s wall_patches=%s",
+        "geometry walls=%s floor_patches=%s ceiling_patches=%s wall_patches=%s",
         len(room.walls),
         len(floor_patches),
+        len(ceiling_patches),
         {wid: len(pts) for wid, pts in wall_patches.items()},
     )
     ies = load_ies(ies_text)
-    fixtures = generate_fixture_grid(room, payload.grid, room.height, ies)
-    _log.info("fixtures=%s", len(fixtures))
+    fixtures = generate_fixture_grid(
+        room, payload.grid, mount_h, ies, rotation=payload.luminaireRotation
+    )
+    _log.info("fixtures=%s rotation=%s", len(fixtures), payload.luminaireRotation)
 
     raw_floor_direct = {
         fixture.id: compute_direct_matrix(
-            fixture, floor_patches, "floor", patch_size=floor_cell, room_polygon=room.polygon
+            fixture, floor_patches, "floor", patch_size=floor_cell, room_polygon=room.polygon,
+            c0_offset_deg=C0_ORIENTATION_OFFSET_DEG,
         )
         for fixture in fixtures
     }
     raw_wall_direct: dict[str, dict[str, Matrix]] = {wall.id: {} for wall in room.walls}
     for wall in room.walls:
+        surface = WallSurface(wall.id, wall.start, wall.end, wall.height, wall.normal)
+        coarse = wall_patches[wall.id]
+        fine, coarse_idx = subdivide_wall_patches(coarse, surface)
         for fixture in fixtures:
-            raw_wall_direct[wall.id][fixture.id] = compute_direct_matrix(
+            m_fine = compute_direct_matrix(
                 fixture,
-                wall_patches[wall.id],
+                fine,
                 "wall",
-                patch_size=PATCH_SIZE,
+                patch_size=PATCH_SIZE / 2,
                 wall_id=wall.id,
                 room_polygon=room.polygon,
+                c0_offset_deg=C0_ORIENTATION_OFFSET_DEG,
             )
+            sums = [0.0] * len(coarse)
+            counts = [0] * len(coarse)
+            for value, ci in zip(m_fine.values, coarse_idx):
+                sums[ci] += value
+                counts[ci] += 1
+            averaged = [s / counts[i] if counts[i] else 0.0 for i, s in enumerate(sums)]
+            raw_wall_direct[wall.id][fixture.id] = Matrix(
+                averaged,
+                {
+                    "kind": "direct",
+                    "surfaceType": "wall",
+                    "patchSize": PATCH_SIZE,
+                    "fixtureId": fixture.id,
+                    "wallId": wall.id,
+                    "occlusion": "room-polygon",
+                },
+            )
+    ceiling_cell = ceiling_patches[0].size if ceiling_patches else floor_cell
+    raw_ceiling_direct = {
+        fixture.id: compute_direct_matrix(
+            fixture, ceiling_patches, "ceiling", patch_size=ceiling_cell, room_polygon=room.polygon,
+            c0_offset_deg=C0_ORIENTATION_OFFSET_DEG,
+        )
+        for fixture in fixtures
+    } if ceiling_patches else {}
 
     raw_indirect: dict[str, Matrix] = {}
     if fixtures and NUM_BOUNCES > 0:
         all_wall_patches: list[Patch] = [p for wall in room.walls for p in wall_patches[wall.id]]
+        all_source_patches: list[Patch] = [*all_wall_patches, *floor_patches, *ceiling_patches]
         offsets: dict[str, int] = {}
         pos = 0
         for wall in room.walls:
             offsets[wall.id] = pos
             pos += len(wall_patches[wall.id])
+        floor_offset = pos
+        pos += len(floor_patches)
+        ceiling_offset = pos
+        total_floor_direct = sum_matrices(list(raw_floor_direct.values())) if raw_floor_direct else None
+        total_ceiling_direct = sum_matrices(list(raw_ceiling_direct.values())) if raw_ceiling_direct else None
         seeds: dict[str, list[float]] = {}
         for wall in room.walls:
             total_wall = sum_matrices(list(raw_wall_direct[wall.id].values()))
-            seed = [0.0] * len(all_wall_patches)
+            seed = [0.0] * len(all_source_patches)
             start = offsets[wall.id]
             seed[start : start + len(total_wall.values)] = list(total_wall.values)
             seeds[wall.id] = seed
+        if total_floor_direct is not None:
+            seed = [0.0] * len(all_source_patches)
+            seed[floor_offset : floor_offset + len(total_floor_direct.values)] = list(
+                total_floor_direct.values
+            )
+            seeds["floor"] = seed
+        if total_ceiling_direct is not None and ceiling_patches:
+            seed = [0.0] * len(all_source_patches)
+            seed[ceiling_offset : ceiling_offset + len(total_ceiling_direct.values)] = list(
+                total_ceiling_direct.values
+            )
+            seeds["ceiling"] = seed
         per_origin = compute_indirect_floor_per_origin(
-            all_wall_patches,
+            all_source_patches,
             seeds,
             floor_patches,
             WALL_REFLECTANCE_FACTOR,
             NUM_BOUNCES,
             room.polygon,
+            floor_reflectance=FLOOR_REFLECTANCE_FACTOR,
+            ceiling_reflectance=CEILING_REFLECTANCE_FACTOR,
         )
-        for wall in room.walls:
-            raw_indirect[wall.id] = Matrix(
-                per_origin[wall.id],
+        for origin_id in per_origin:
+            raw_indirect[origin_id] = Matrix(
+                per_origin[origin_id],
                 {
                     "kind": "indirect",
                     "surfaceType": "floor",
-                    "sourceWallId": wall.id,
+                    "sourceWallId": origin_id,
                     "patchSize": floor_cell,
                     "bounces": NUM_BOUNCES,
                     "wallReflectance": WALL_REFLECTANCE_FACTOR,
+                    "floorReflectance": FLOOR_REFLECTANCE_FACTOR,
+                    "ceilingReflectance": CEILING_REFLECTANCE_FACTOR,
                 },
             )
     else:
@@ -121,8 +185,25 @@ def calculate(payload: CalculateRequest, ies_text: str) -> CalculateResponse:
                     "patchSize": floor_cell,
                     "bounces": 0,
                     "wallReflectance": WALL_REFLECTANCE_FACTOR,
+                    "floorReflectance": FLOOR_REFLECTANCE_FACTOR,
+                    "ceilingReflectance": CEILING_REFLECTANCE_FACTOR,
                 },
             )
+        if ceiling_patches:
+            for origin_id in ("floor", "ceiling"):
+                raw_indirect[origin_id] = Matrix(
+                    [0.0] * len(floor_patches),
+                    {
+                        "kind": "indirect",
+                        "surfaceType": "floor",
+                        "sourceWallId": origin_id,
+                        "patchSize": floor_cell,
+                        "bounces": 0,
+                        "wallReflectance": WALL_REFLECTANCE_FACTOR,
+                        "floorReflectance": FLOOR_REFLECTANCE_FACTOR,
+                        "ceilingReflectance": CEILING_REFLECTANCE_FACTOR,
+                    },
+                )
 
     raw_total = sum_matrices([*raw_floor_direct.values(), *raw_indirect.values()])
     mf = MAINTENANCE_FACTOR
@@ -133,22 +214,30 @@ def calculate(payload: CalculateRequest, ies_text: str) -> CalculateResponse:
         fixtures=[_fixture(fixture) for fixture in fixtures],
         floorPatches=[_patch(p) for p in floor_patches],
         wallPatches={wid: [_patch(p) for p in pts] for wid, pts in wall_patches.items()},
+        ceilingPatches=[_patch(p) for p in ceiling_patches],
         directFloorMatrices={fid: _matrix(apply_maintenance_factor(m, mf)) for fid, m in raw_floor_direct.items()},
         directWallMatrices={
             wid: {fid: _matrix(apply_maintenance_factor(m, mf)) for fid, m in per_fix.items()}
             for wid, per_fix in raw_wall_direct.items()
         },
+        directCeilingMatrices={fid: _matrix(apply_maintenance_factor(m, mf)) for fid, m in raw_ceiling_direct.items()},
         indirectFloorMatrices={wid: _matrix(apply_maintenance_factor(m, mf)) for wid, m in raw_indirect.items()},
         totalFloorIlluminance=_matrix(total_maintained),
         evaluation=evaluation,
         bounces=applied_bounces,
         wallReflectance=WALL_REFLECTANCE_FACTOR,
+        floorReflectance=FLOOR_REFLECTANCE_FACTOR,
+        ceilingReflectance=CEILING_REFLECTANCE_FACTOR,
+        ceilingHeight=ceiling_h,
+        mountingHeight=mount_h,
     )
     _log.info(
-        "success duration_ms=%.1f bounces=%s wall_reflectance=%s",
+        "success duration_ms=%.1f bounces=%s wall_reflectance=%s floor_reflectance=%s ceiling_reflectance=%s",
         (time.perf_counter() - started) * 1000,
         applied_bounces,
         WALL_REFLECTANCE_FACTOR,
+        FLOOR_REFLECTANCE_FACTOR,
+        CEILING_REFLECTANCE_FACTOR,
     )
     return response
 

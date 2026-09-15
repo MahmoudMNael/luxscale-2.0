@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.schemas.geometry import PatchDto, Point2D, Vec3Dto
 from app.schemas.grid import GridInput
@@ -63,7 +63,17 @@ class CalculateRequest(BaseModel):
         min_length=3,
         description="Room footprint vertices in meters (closing vertex optional)",
     )
-    height: float = Field(..., gt=0, description="Room height in meters")
+    height: float = Field(..., gt=0, description="Room height in meters (fallback for ceiling/mounting heights)")
+    ceilingHeight: float | None = Field(
+        default=None,
+        gt=0,
+        description="Ceiling plane height in meters; walls extend to this. Defaults to height.",
+    )
+    mountingHeight: float | None = Field(
+        default=None,
+        gt=0,
+        description="Fixture mounting height in meters (e.g. pendant drop below ceiling). Defaults to ceilingHeight.",
+    )
     grid: GridInput
     workPlaneHeight: float = Field(
         default=0.0,
@@ -75,23 +85,51 @@ class CalculateRequest(BaseModel):
         ge=0,
         description="DIALux-like boundary/wall zone inset in meters; EN 12464 evaluation excludes this strip",
     )
+    luminaireRotation: float = Field(
+        default=0.0,
+        ge=0,
+        le=360,
+        description="In-room rotation of the luminaire housing in degrees, added to the photometric C-planes",
+    )
+
+    @model_validator(mode="after")
+    def _check_mounting_not_above_ceiling(self):
+        if (
+            self.ceilingHeight is not None
+            and self.mountingHeight is not None
+            and self.mountingHeight > self.ceilingHeight
+        ):
+            raise ValueError("mountingHeight cannot exceed ceilingHeight")
+        return self
 
 
 class CalculateResponse(BaseModel):
     fixtures: list[FixtureDto]
     floorPatches: list[PatchDto]
     wallPatches: dict[str, list[PatchDto]] = Field(..., description="wallId → patches")
+    ceilingPatches: list[PatchDto] = Field(default_factory=list, description="ceiling patches")
     directFloorMatrices: dict[str, MatrixDto] = Field(..., description="fixtureId → matrix")
     directWallMatrices: dict[str, dict[str, MatrixDto]] = Field(
         ...,
         description="wallId → fixtureId → matrix",
     )
+    directCeilingMatrices: dict[str, MatrixDto] = Field(
+        default_factory=dict, description="fixtureId → ceiling matrix"
+    )
     indirectFloorMatrices: dict[str, MatrixDto] = Field(
         ...,
-        description="wallId → floor matrix from wall interreflection (walls only; floor/ceiling never re-emit), "
-        "summed over all bounces originating from that wall",
+        description="originId → floor matrix from interreflection (walls, floor and ceiling re-emit), "
+        "summed over all bounces originating from that surface",
     )
     totalFloorIlluminance: MatrixDto
     evaluation: EvaluationDto = Field(..., description="EN 12464 summary over the total floor matrix")
-    bounces: int = Field(..., description="Applied wall bounces (app_settings.NUM_BOUNCES)")
+    bounces: int = Field(..., description="Applied bounces (app_settings.NUM_BOUNCES)")
     wallReflectance: float = Field(..., description="Applied wall reflectance (app_settings.WALL_REFLECTANCE_FACTOR)")
+    floorReflectance: float = Field(
+        default=0.2, description="Applied floor reflectance (app_settings.FLOOR_REFLECTANCE_FACTOR)"
+    )
+    ceilingReflectance: float = Field(
+        default=0.7, description="Applied ceiling reflectance (app_settings.CEILING_REFLECTANCE_FACTOR)"
+    )
+    ceilingHeight: float = Field(..., description="Applied ceiling plane height in meters")
+    mountingHeight: float = Field(..., description="Applied fixture mounting height in meters")

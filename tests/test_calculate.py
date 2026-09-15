@@ -25,6 +25,13 @@ def _payload() -> CalculateRequest:
     )
 
 
+def test_luminaire_rotation_reaches_fixtures():
+    payload = _payload()
+    payload.luminaireRotation = 90.0
+    result = calculate(payload, SAMPLE_IES)
+    assert all(f.rotation == 90.0 for f in result.fixtures)
+
+
 def test_pipeline_floor_lux_and_maintenance_metadata():
     result = calculate(_payload(), SAMPLE_IES)
     assert result.fixtures

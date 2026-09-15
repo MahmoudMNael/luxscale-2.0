@@ -6,7 +6,7 @@ import numpy as np
 
 from app.domain.exceptions import GeometryError
 from app.domain.models import Matrix, Patch
-from app.services.vector_math import EPS, Vec2, angle_deg, is_convex_polygon, room_polygon, segment_inside_room, visibility_room_polygon
+from app.services.vector_math import EPS, Vec2, angle_deg, is_convex_polygon, room_polygon, segment_inside_room, visibility_polygon
 
 
 def form_factor(source_patch: Patch, target_patch: Patch) -> float:
@@ -54,29 +54,48 @@ def compute_indirect_contribution(
 
 
 def _wall_floor_visibility(
-    wall_patches: list[Patch],
+    source_patches: list[Patch],
     floor_patches: list[Patch],
     polygon: list[Vec2],
-) -> "np.ndarray | None":
-    """Precompute wall->floor plan-view visibility. None = all visible (convex)."""
-    import numpy as np
+) -> "tuple[np.ndarray | None, object | None]":
+    """Precompute source->floor plan-view visibility.
 
-    if not wall_patches or not floor_patches:
-        return None
+    Returns (visible bool matrix, prepared room) for fractional refinement,
+    or (None, None) when all visible (convex).
+    """
+    if not source_patches or not floor_patches:
+        return None, None
     if is_convex_polygon(polygon):
-        return None
-    room = visibility_room_polygon(polygon)
-    n_wall = len(wall_patches)
+        return None, None
+    room = visibility_polygon(polygon)
+    n_src = len(source_patches)
     n_floor = len(floor_patches)
-    vis = np.ones((n_wall, n_floor), dtype=bool)
+    vis = np.ones((n_src, n_floor), dtype=bool)
     for j, target in enumerate(floor_patches):
         tx, ty = target.center[0], target.center[1]
-        for i, source in enumerate(wall_patches):
+        for i, source in enumerate(source_patches):
             if not segment_inside_room(
                 (source.center[0], source.center[1]), (tx, ty), room
             ):
                 vis[i, j] = False
-    return vis
+    return vis, room
+
+
+def _segment_fraction(a: Vec2, b: Vec2, room) -> float:
+    """Visible fraction of a plan-view segment: 1, 0.5 or 0.
+
+    Never blocks what the exact whole-segment test allows; halves recover
+    grazing transfers that a binary gate would drop entirely.
+    """
+    if segment_inside_room(a, b, room):
+        return 1.0
+    mid = ((a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0)
+    fraction = 0.0
+    if segment_inside_room(a, mid, room):
+        fraction += 0.5
+    if segment_inside_room(mid, b, room):
+        fraction += 0.5
+    return fraction
 
 
 def compute_bounce_values(
@@ -94,10 +113,10 @@ def compute_bounce_values(
     src_n = np.array([p.normal for p in source_patches], dtype=np.float64)
     src_a = np.array([p.area for p in source_patches], dtype=np.float64)
     e_src = np.asarray(source_values, dtype=np.float64)
-    vis = (
+    vis, _ = (
         _wall_floor_visibility(source_patches, target_patches, room_polygon)
         if room_polygon is not None
-        else None
+        else (None, None)
     )
     out: list[float] = []
     for j, target in enumerate(target_patches):
@@ -146,68 +165,94 @@ def compute_indirect_matrix_from_wall(
 
 
 def compute_indirect_floor_per_origin(
-    all_wall_patches: list[Patch],
+    all_source_patches: list[Patch],
     origin_seeds: dict[str, list[float]],
     floor_patches: list[Patch],
     wall_reflectance: float,
     num_bounces: int,
     room_polygon: list[Vec2] | None = None,
+    *,
+    floor_reflectance: float = 0.0,
+    ceiling_reflectance: float = 0.0,
 ) -> dict[str, list[float]]:
     interact = sorted(origin_seeds)
-    n_wall = len(all_wall_patches)
+    n_src = len(all_source_patches)
+    n_floor = len(floor_patches)
     for values in origin_seeds.values():
-        if len(values) != n_wall:
+        if len(values) != n_src:
             raise GeometryError("Cannot sum matrices with different patch layouts.")
-    if num_bounces <= 0 or not floor_patches or not all_wall_patches:
-        return {wall_id: [0.0] * len(floor_patches) for wall_id in interact}
+    if num_bounces <= 0 or not floor_patches or not all_source_patches:
+        return {wall_id: [0.0] * n_floor for wall_id in interact}
 
-    src_c = np.array([p.center for p in all_wall_patches], dtype=np.float64)
-    src_n = np.array([p.normal for p in all_wall_patches], dtype=np.float64)
-    src_a = np.array([p.area for p in all_wall_patches], dtype=np.float64)
+    rho = np.array(
+        [
+            wall_reflectance
+            if p.surface_type == "wall"
+            else floor_reflectance
+            if p.surface_type == "floor"
+            else ceiling_reflectance
+            for p in all_source_patches
+        ],
+        dtype=np.float64,
+    )
+    src_c = np.array([p.center for p in all_source_patches], dtype=np.float64)
+    src_n = np.array([p.normal for p in all_source_patches], dtype=np.float64)
+    src_a = np.array([p.area for p in all_source_patches], dtype=np.float64)
     floor_c = np.array([p.center for p in floor_patches], dtype=np.float64)
     floor_n = np.array([p.normal for p in floor_patches], dtype=np.float64)
-    wall_c = src_c
-    wall_n = src_n
 
-    cur = np.array([origin_seeds[wall_id] for wall_id in interact], dtype=np.float64)
-    accum = np.zeros((len(interact), len(floor_patches)), dtype=np.float64)
-    vis = (
-        _wall_floor_visibility(all_wall_patches, floor_patches, room_polygon)
+    vis, vis_room = (
+        _wall_floor_visibility(all_source_patches, floor_patches, room_polygon)
         if room_polygon is not None
-        else None
+        else (None, None)
     )
+    src_xy = [(p.center[0], p.center[1]) for p in all_source_patches]
+    tgt_xy = [(p.center[0], p.center[1]) for p in floor_patches]
 
-    for _ in range(num_bounces):
-        for j in range(len(floor_patches)):
-            line = floor_c[j] - src_c
-            d2 = np.einsum("ij,ij->i", line, line)
-            valid = d2 >= EPS * EPS
-            d = np.sqrt(np.maximum(d2, EPS * EPS))
-            cos1 = (line * src_n).sum(axis=1) / d
-            cos2 = -(line * floor_n[j]).sum(axis=1) / d
-            ok = valid & (cos1 > 0.0) & (cos2 > 0.0)
-            if vis is not None:
-                ok = ok & vis[:, j]
-            if not bool(ok.any()):
-                continue
-            g = np.zeros_like(d2)
-            g[ok] = src_a[ok] * cos1[ok] * cos2[ok] / (math.pi * d2[ok])
-            accum[:, j] += (cur[:, ok] * wall_reflectance) @ g[ok]
-        if _ < num_bounces - 1:
-            nxt = np.zeros_like(cur)
-            active = np.any(cur != 0.0, axis=0)
-            for t in range(n_wall):
-                line = wall_c[t] - src_c
-                d2 = np.einsum("ij,ij->i", line, line)
-                valid = d2 >= EPS * EPS
-                d = np.sqrt(np.maximum(d2, EPS * EPS))
-                cos1 = (line * src_n).sum(axis=1) / d
-                cos2 = -(line * wall_n[t]).sum(axis=1) / d
-                ok = valid & active & (cos1 > 0.0) & (cos2 > 0.0)
-                if not bool(ok.any()):
+    F = np.zeros((n_src, n_src), dtype=np.float64)
+    for t in range(n_src):
+        line = src_c[t] - src_c
+        d2 = np.einsum("ij,ij->i", line, line)
+        valid = d2 >= EPS * EPS
+        d = np.sqrt(np.maximum(d2, EPS * EPS))
+        cos1 = (line * src_n).sum(axis=1) / d
+        cos2 = -(line * src_n[t]).sum(axis=1) / d
+        ok = valid & (cos1 > 0.0) & (cos2 > 0.0)
+        g = np.zeros_like(d2)
+        g[ok] = src_a[ok] * cos1[ok] * cos2[ok] / (math.pi * d2[ok])
+        g[t] = 0.0
+        F[:, t] = g
+
+    G = np.zeros((n_floor, n_src), dtype=np.float64)
+    for j in range(n_floor):
+        line = floor_c[j] - src_c
+        d2 = np.einsum("ij,ij->i", line, line)
+        valid = d2 >= EPS * EPS
+        d = np.sqrt(np.maximum(d2, EPS * EPS))
+        cos1 = (line * src_n).sum(axis=1) / d
+        cos2 = -(line * floor_n[j]).sum(axis=1) / d
+        ok = valid & (cos1 > 0.0) & (cos2 > 0.0)
+        g = np.zeros_like(d2)
+        g[ok] = src_a[ok] * cos1[ok] * cos2[ok] / (math.pi * d2[ok])
+        if vis is not None:
+            gmax = float(g.max()) if g.size else 0.0
+            if gmax > 0.0:
+                sig = ~vis[:, j] & (g > 0.01 * gmax)
+                if bool(sig.any()):
+                    w = vis[:, j].astype(np.float64)
+                    for i in np.where(sig)[0]:
+                        w[i] = _segment_fraction(src_xy[int(i)], tgt_xy[j], vis_room)
+                    G[j, :] = g * w
                     continue
-                g = np.zeros_like(d2)
-                g[ok] = src_a[ok] * cos1[ok] * cos2[ok] / (math.pi * d2[ok])
-                nxt[:, t] = (cur[:, ok] * wall_reflectance) @ g[ok]
-            cur = nxt
-    return {wall_id: accum[i].tolist() for i, wall_id in enumerate(interact)}
+            G[j, :] = g * vis[:, j]
+        else:
+            G[j, :] = g
+
+    I_mat = np.eye(n_src, dtype=np.float64)
+    A = I_mat - rho[:, None] * F
+    seeds = np.array([origin_seeds[wall_id] for wall_id in interact], dtype=np.float64)
+    E_src = seeds @ np.linalg.inv(A)
+    E_floor = (G * rho[None, :]) @ E_src.T
+    E_floor = E_floor.T
+
+    return {wall_id: E_floor[i].tolist() for i, wall_id in enumerate(interact)}
