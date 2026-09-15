@@ -50,6 +50,13 @@ def en12464_spacing(d: float) -> float:
     # return 0.4
 
 
+def perimeter_border(shortest: float) -> float:
+    """EN 12464-1 15% rule: excluded strip = 15% of shortest side, max 0.5 m."""
+    if shortest <= EPS:
+        return 0.0
+    return min(0.15 * shortest, 0.5)
+
+
 def _room(polygon: list[Vec2]) -> Polygon:
     poly = Polygon(polygon)
     if not poly.is_valid:

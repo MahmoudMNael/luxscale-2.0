@@ -46,8 +46,8 @@ def test_floor_patches_inset_rect_symmetric_centres():
         border=border,
     )
     width, height = 3.0, 2.0
-    spacing = en12464_spacing(max(width, height))
-    nx, ny = _fit_count(width, spacing), _fit_count(height, spacing)
+    nx = _fit_count(width, en12464_spacing(width))
+    ny = _fit_count(height, en12464_spacing(height))
     dx, dy = width / nx, height / ny
     xs = [p.center[0] for p in patches]
     ys = [p.center[1] for p in patches]
@@ -82,9 +82,8 @@ def test_floor_patches_inset_skips_l_inner_edge():
     ys = [p[1] for ring in domains for p in ring]
     xmin, ymin = min(xs), min(ys)
     width, height = max(xs) - xmin, max(ys) - ymin
-    spacing = en12464_spacing(max(width, height))
-    dx = width / _fit_count(width, spacing)
-    dy = height / _fit_count(height, spacing)
+    dx = width / _fit_count(width, en12464_spacing(width))
+    dy = height / _fit_count(height, en12464_spacing(height))
     assert not any(p.center[0] > 3.0 and p.center[1] > 3.0 for p in patches)
     for p in patches:
         cx, cy = p.center[0], p.center[1]
@@ -119,6 +118,48 @@ def test_subdivide_wall_patches_maps_onto_coarse():
     assert sorted(coarse_idx) == [i for i in range(len(coarse)) for _ in range(4)]
     assert coarse_idx[0] == 0
     assert coarse_idx[-1] == len(coarse) - 1
+
+
+def test_wall_evaluation_grid_15pct_capped_and_1m_neglect():
+    from app.domain.models import Wall
+    from app.services.geometry_service import generate_wall_evaluation_grid, resolve_wall_border
+
+    assert resolve_wall_border(4.0, 3.0, None) == pytest.approx(0.45)
+    assert resolve_wall_border(8.0, 5.0, None) == pytest.approx(0.5)
+    assert resolve_wall_border(4.0, 3.0, 0.25) == pytest.approx(0.25)
+    tiny = Wall(id="W9", start=(0.0, 0.0), end=(0.9, 0.0), length=0.9, normal=(0.0, 1.0), height=3.0)
+    patches, meta = generate_wall_evaluation_grid(tiny, resolve_wall_border(tiny.length, tiny.height, None))
+    assert patches == []
+    edge = Wall(id="W1", start=(0.0, 0.0), end=(1.0, 0.0), length=1.0, normal=(0.0, 1.0), height=3.0)
+    patches, _ = generate_wall_evaluation_grid(edge, resolve_wall_border(edge.length, edge.height, None))
+    assert patches == []
+    kept = Wall(id="W2", start=(0.0, 0.0), end=(1.01, 0.0), length=1.01, normal=(0.0, 1.0), height=3.0)
+    patches, meta = generate_wall_evaluation_grid(kept, resolve_wall_border(kept.length, kept.height, None))
+    assert patches
+    assert meta["border"] == pytest.approx(min(0.15 * 1.01, 0.5))
+
+
+def test_per_axis_spacing_matches_relux_8x8():
+    from app.services.geometry_service import generate_floor_evaluation_grid, generate_wall_evaluation_grid
+    from app.domain.models import Wall
+
+    demov1 = [(0, 0), (4.85, 0), (4.85, 5.26), (1.45, 5.26), (1.45, 4.33), (0.55, 4.33), (0.55, 1.63), (0, 1.63)]
+    _, meta = generate_floor_evaluation_grid(demov1, 0.0, 0.5)
+    assert int(meta["nx"]) == 8
+    assert int(meta["ny"]) == 8
+    assert meta["spacingX"] == pytest.approx(en12464_spacing(3.85), rel=0.05)
+    assert meta["spacingY"] == pytest.approx(en12464_spacing(4.26), rel=0.05)
+    wall = Wall(id="W1", start=(0.0, 0.0), end=(4.0, 0.0), length=4.0, normal=(0.0, 1.0), height=2.0)
+    _, wmeta = generate_wall_evaluation_grid(wall, 0.3)
+    assert int(wmeta["nx"]) == _fit_count(3.4, en12464_spacing(3.4))
+    assert int(wmeta["ny"]) == _fit_count(1.4, en12464_spacing(1.4))
+
+
+def test_horizontal_border_defaults_to_half_metre():
+    from app.services.geometry_service import resolve_horizontal_border
+
+    assert resolve_horizontal_border([(0, 0), (8, 0), (8, 6), (0, 6)], None) == pytest.approx(0.5)
+    assert resolve_horizontal_border([(0, 0), (8, 0), (8, 6), (0, 6)], 0.25) == pytest.approx(0.25)
 
 
 def test_zero_area_polygon_fails():

@@ -17,7 +17,9 @@ class EvaluationDto(BaseModel):
     minPoint: Vec3Dto = Field(..., description="Center of the Emin evaluation point")
     maxPoint: Vec3Dto = Field(..., description="Center of the Emax evaluation point")
     count: int = Field(..., description="Number of EN 12464 evaluation points")
-    spacing: float = Field(..., description="EN 12464 target spacing p, meters")
+    spacing: float = Field(..., description="EN 12464 target spacing p (max of axes), meters")
+    spacingX: float = Field(default=0.0, description="EN 12464 per-axis spacing px, meters")
+    spacingY: float = Field(default=0.0, description="EN 12464 per-axis spacing py, meters")
     nx: int = Field(..., description="Cells along X over the inset bounding box")
     ny: int = Field(..., description="Cells along Y over the inset bounding box")
     wallZone: float = Field(..., description="Applied boundary inset, meters")
@@ -80,10 +82,15 @@ class CalculateRequest(BaseModel):
         ge=0,
         description="DIALux-like calculation-surface height in meters (0 = true floor)",
     )
-    wallZone: float = Field(
-        default=0.25,
+    floorZone: float | None = Field(
+        default=0.5,
         ge=0,
-        description="DIALux-like boundary/wall zone inset in meters; EN 12464 evaluation excludes this strip",
+        description="Floor/ceiling boundary inset in meters; default 0.5, None also resolves to 0.5",
+    )
+    wallZone: float | None = Field(
+        default=None,
+        ge=0,
+        description="Wall boundary inset in meters; None = auto 15% rule min(0.15*min(L,H), 0.5). Walls with min(L,H) <= 1.0 m are neglected",
     )
     luminaireRotation: float = Field(
         default=0.0,
@@ -121,8 +128,18 @@ class CalculateResponse(BaseModel):
         description="originId → floor matrix from interreflection (walls, floor and ceiling re-emit), "
         "summed over all bounces originating from that surface",
     )
+    indirectCeilingMatrices: dict[str, MatrixDto] = Field(
+        default_factory=dict, description="originId → ceiling matrix from interreflection"
+    )
+    indirectWallMatrices: dict[str, dict[str, MatrixDto]] = Field(
+        default_factory=dict, description="wallId → originId → wall matrix from interreflection"
+    )
     totalFloorIlluminance: MatrixDto
+    totalCeilingIlluminance: MatrixDto | None = Field(default=None, description="Maintained total on ceiling grid")
+    totalWallIlluminance: dict[str, MatrixDto] = Field(default_factory=dict, description="wallId → maintained total")
     evaluation: EvaluationDto = Field(..., description="EN 12464 summary over the total floor matrix")
+    ceilingEvaluation: EvaluationDto | None = Field(default=None, description="EN 12464 summary over ceiling")
+    wallEvaluations: dict[str, EvaluationDto] = Field(default_factory=dict, description="wallId → EN 12464 summary")
     bounces: int = Field(..., description="Applied bounces (app_settings.NUM_BOUNCES)")
     wallReflectance: float = Field(..., description="Applied wall reflectance (app_settings.WALL_REFLECTANCE_FACTOR)")
     floorReflectance: float = Field(

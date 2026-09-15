@@ -17,6 +17,7 @@ def _payload() -> CalculateRequest:
     return CalculateRequest(
         polygon=[Point2D(x=0, y=0), Point2D(x=4, y=0), Point2D(x=4, y=4), Point2D(x=0, y=4)],
         height=3,
+        floorZone=WALL_ZONE,
         wallZone=WALL_ZONE,
         grid=GridInput(
             x=AxisGrid(spacing=2, offsetBeginning=1, offsetEnding=1),

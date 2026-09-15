@@ -7,6 +7,7 @@ C0_ORIENTATION_OFFSET_DEG = 90.0  # added to photometric phi; aligns IES C0 with
 NUM_BOUNCES = 5  # wall interreflection bounces; 0 = direct only, 1 = legacy single bounce
 MAINTENANCE_FACTOR = 0.8
 WORK_PLANE_HEIGHT = 0.0
-FLOOR_BORDER = 0.0
-PATCH_SIZE = 0.1  # wall radiosity mesh only; floor uses EN 12464 spacing
+FLOOR_BORDER = 0.5
+WALL_MIN_DIMENSION = 1.0
+PATCH_SIZE = 0.1  # legacy wall radiosity mesh; evaluation grids use EN 12464 spacing
 LOG_LEVEL = "INFO"

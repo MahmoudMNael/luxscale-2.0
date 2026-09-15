@@ -175,14 +175,32 @@ def compute_indirect_floor_per_origin(
     floor_reflectance: float = 0.0,
     ceiling_reflectance: float = 0.0,
 ) -> dict[str, list[float]]:
+    out = compute_indirect_per_target_per_origin(
+        all_source_patches, origin_seeds, {"__floor__": floor_patches},
+        wall_reflectance, num_bounces, room_polygon,
+        floor_reflectance=floor_reflectance, ceiling_reflectance=ceiling_reflectance,
+    )
+    return {origin: out["__floor__"][origin] for origin in origin_seeds}
+
+
+def compute_indirect_per_target_per_origin(
+    all_source_patches: list[Patch],
+    origin_seeds: dict[str, list[float]],
+    targets: dict[str, list[Patch]],
+    wall_reflectance: float,
+    num_bounces: int,
+    room_polygon: list[Vec2] | None = None,
+    *,
+    floor_reflectance: float = 0.0,
+    ceiling_reflectance: float = 0.0,
+) -> dict[str, dict[str, list[float]]]:
     interact = sorted(origin_seeds)
     n_src = len(all_source_patches)
-    n_floor = len(floor_patches)
     for values in origin_seeds.values():
         if len(values) != n_src:
             raise GeometryError("Cannot sum matrices with different patch layouts.")
-    if num_bounces <= 0 or not floor_patches or not all_source_patches:
-        return {wall_id: [0.0] * n_floor for wall_id in interact}
+    if num_bounces <= 0 or not all_source_patches:
+        return {tid: {oid: [0.0] * len(tp) for oid in interact} for tid, tp in targets.items()}
 
     rho = np.array(
         [
@@ -198,16 +216,7 @@ def compute_indirect_floor_per_origin(
     src_c = np.array([p.center for p in all_source_patches], dtype=np.float64)
     src_n = np.array([p.normal for p in all_source_patches], dtype=np.float64)
     src_a = np.array([p.area for p in all_source_patches], dtype=np.float64)
-    floor_c = np.array([p.center for p in floor_patches], dtype=np.float64)
-    floor_n = np.array([p.normal for p in floor_patches], dtype=np.float64)
-
-    vis, vis_room = (
-        _wall_floor_visibility(all_source_patches, floor_patches, room_polygon)
-        if room_polygon is not None
-        else (None, None)
-    )
     src_xy = [(p.center[0], p.center[1]) for p in all_source_patches]
-    tgt_xy = [(p.center[0], p.center[1]) for p in floor_patches]
 
     F = np.zeros((n_src, n_src), dtype=np.float64)
     for t in range(n_src):
@@ -223,36 +232,49 @@ def compute_indirect_floor_per_origin(
         g[t] = 0.0
         F[:, t] = g
 
-    G = np.zeros((n_floor, n_src), dtype=np.float64)
-    for j in range(n_floor):
-        line = floor_c[j] - src_c
-        d2 = np.einsum("ij,ij->i", line, line)
-        valid = d2 >= EPS * EPS
-        d = np.sqrt(np.maximum(d2, EPS * EPS))
-        cos1 = (line * src_n).sum(axis=1) / d
-        cos2 = -(line * floor_n[j]).sum(axis=1) / d
-        ok = valid & (cos1 > 0.0) & (cos2 > 0.0)
-        g = np.zeros_like(d2)
-        g[ok] = src_a[ok] * cos1[ok] * cos2[ok] / (math.pi * d2[ok])
-        if vis is not None:
-            gmax = float(g.max()) if g.size else 0.0
-            if gmax > 0.0:
-                sig = ~vis[:, j] & (g > 0.01 * gmax)
-                if bool(sig.any()):
-                    w = vis[:, j].astype(np.float64)
-                    for i in np.where(sig)[0]:
-                        w[i] = _segment_fraction(src_xy[int(i)], tgt_xy[j], vis_room)
-                    G[j, :] = g * w
-                    continue
-            G[j, :] = g * vis[:, j]
-        else:
-            G[j, :] = g
-
     I_mat = np.eye(n_src, dtype=np.float64)
     A = I_mat - rho[:, None] * F
-    seeds = np.array([origin_seeds[wall_id] for wall_id in interact], dtype=np.float64)
+    seeds = np.array([origin_seeds[oid] for oid in interact], dtype=np.float64)
     E_src = seeds @ np.linalg.inv(A)
-    E_floor = (G * rho[None, :]) @ E_src.T
-    E_floor = E_floor.T
 
-    return {wall_id: E_floor[i].tolist() for i, wall_id in enumerate(interact)}
+    out: dict[str, dict[str, list[float]]] = {}
+    for tid, tgt_patches in targets.items():
+        n_tgt = len(tgt_patches)
+        if n_tgt == 0:
+            out[tid] = {oid: [] for oid in interact}
+            continue
+        tgt_c = np.array([p.center for p in tgt_patches], dtype=np.float64)
+        tgt_n = np.array([p.normal for p in tgt_patches], dtype=np.float64)
+        tgt_xy = [(p.center[0], p.center[1]) for p in tgt_patches]
+        vis, vis_room = (
+            _wall_floor_visibility(all_source_patches, tgt_patches, room_polygon)
+            if room_polygon is not None
+            else (None, None)
+        )
+        G = np.zeros((n_tgt, n_src), dtype=np.float64)
+        for j in range(n_tgt):
+            line = tgt_c[j] - src_c
+            d2 = np.einsum("ij,ij->i", line, line)
+            valid = d2 >= EPS * EPS
+            d = np.sqrt(np.maximum(d2, EPS * EPS))
+            cos1 = (line * src_n).sum(axis=1) / d
+            cos2 = -(line * tgt_n[j]).sum(axis=1) / d
+            ok = valid & (cos1 > 0.0) & (cos2 > 0.0)
+            g = np.zeros_like(d2)
+            g[ok] = src_a[ok] * cos1[ok] * cos2[ok] / (math.pi * d2[ok])
+            if vis is not None:
+                gmax = float(g.max()) if g.size else 0.0
+                if gmax > 0.0:
+                    sig = ~vis[:, j] & (g > 0.01 * gmax)
+                    if bool(sig.any()):
+                        w = vis[:, j].astype(np.float64)
+                        for i in np.where(sig)[0]:
+                            w[i] = _segment_fraction(src_xy[int(i)], tgt_xy[j], vis_room)
+                        G[j, :] = g * w
+                        continue
+                G[j, :] = g * vis[:, j]
+            else:
+                G[j, :] = g
+        E_tgt = ((G * rho[None, :]) @ E_src.T).T
+        out[tid] = {oid: E_tgt[i].tolist() for i, oid in enumerate(interact)}
+    return out
