@@ -193,9 +193,24 @@ def generate_wall_evaluation_grid(
     """
     from app.app_settings import WALL_MIN_DIMENSION
 
+    return _wall_grid(wall, border, apply_neglect=True)
+
+
+def generate_wall_radiosity_grid(wall: Wall) -> tuple[list[Patch], dict[str, float]]:
+    """Full-coverage wall mesh for radiosity (border 0, no 1 m neglect).
+
+    Covers the whole wall so border strips reflect; results are later
+    sampled onto the standard evaluation grid.
+    """
+    return _wall_grid(wall, 0.0, apply_neglect=False)
+
+
+def _wall_grid(wall: Wall, border: float, *, apply_neglect: bool) -> tuple[list[Patch], dict[str, float]]:
+    from app.app_settings import WALL_MIN_DIMENSION
+
     length = wall.length
     height = wall.height
-    if min(length, height) <= WALL_MIN_DIMENSION + EPS:
+    if apply_neglect and min(length, height) <= WALL_MIN_DIMENSION + EPS:
         m = _empty_meta()
         m["border"] = border
         return [], m
@@ -241,6 +256,77 @@ def generate_wall_evaluation_grid(
             "xmin": border, "xmax": border + eff_l, "ymin": border, "ymax": border + eff_h,
             "border": border}
     return patches, meta
+
+
+def _lattice_map(patches: list[Patch], xs: list[float], ys: list[float]) -> dict[tuple[int, int], int]:
+    return {(round(x), round(y)): n for n, (x, y) in enumerate(zip(xs, ys))}
+
+
+def _nearest(values: list[Patch], cx: float, cy: float, cz: float) -> int:
+    best, best_d2 = 0, float("inf")
+    for n, p in enumerate(values):
+        d2 = (p.center[0] - cx) ** 2 + (p.center[1] - cy) ** 2 + (p.center[2] - cz) ** 2
+        if d2 < best_d2:
+            best, best_d2 = n, d2
+    return best
+
+
+def sample_plan_to_eval(
+    full_patches: list[Patch], full_meta: dict[str, float], eval_patches: list[Patch]
+) -> list[int]:
+    """Map each eval centre onto a full-mesh patch index (same surface).
+
+    Index lookup on the full lattice, falling back to nearest centre for
+    cells dropped by polygon clipping (e.g. L-notch edges).
+    """
+    import math as _math
+
+    nx, ny = int(full_meta.get("nx", 0)), int(full_meta.get("ny", 0))
+    dx, dy = float(full_meta.get("dx", 0.0)), float(full_meta.get("dy", 0.0))
+    xmin, ymin = float(full_meta.get("xmin", 0.0)), float(full_meta.get("ymin", 0.0))
+    if not full_patches or nx <= 0 or ny <= 0 or dx <= EPS or dy <= EPS:
+        return []
+    lattice = _lattice_map(
+        full_patches,
+        [round((p.center[0] - xmin) / dx - 0.5) for p in full_patches],
+        [round((p.center[1] - ymin) / dy - 0.5) for p in full_patches],
+    )
+    out: list[int] = []
+    for e in eval_patches:
+        i = min(max(int(_math.floor((e.center[0] - xmin) / dx)), 0), nx - 1)
+        j = min(max(int(_math.floor((e.center[1] - ymin) / dy)), 0), ny - 1)
+        hit = lattice.get((i, j))
+        out.append(hit if hit is not None else _nearest(full_patches, *e.center))
+    return out
+
+
+def sample_wall_to_eval(
+    wall: Wall, full_patches: list[Patch], full_meta: dict[str, float], eval_patches: list[Patch]
+) -> list[int]:
+    """Map each eval wall centre onto a full-mesh wall patch index."""
+    import math as _math
+
+    length = wall.length
+    dx = wall.end[0] - wall.start[0]
+    dy = wall.end[1] - wall.start[1]
+    ux, uy = dx / length, dy / length
+    ns, nz = int(full_meta.get("nx", 0)), int(full_meta.get("ny", 0))
+    ds, dz = float(full_meta.get("dx", 0.0)), float(full_meta.get("dy", 0.0))
+    if not full_patches or ns <= 0 or nz <= 0 or ds <= EPS or dz <= EPS:
+        return []
+    lattice = _lattice_map(
+        full_patches,
+        [round(((p.center[0] - wall.start[0]) * ux + (p.center[1] - wall.start[1]) * uy) / ds - 0.5) for p in full_patches],
+        [round(p.center[2] / dz - 0.5) for p in full_patches],
+    )
+    out: list[int] = []
+    for e in eval_patches:
+        s = (e.center[0] - wall.start[0]) * ux + (e.center[1] - wall.start[1]) * uy
+        i = min(max(int(_math.floor(s / ds)), 0), ns - 1)
+        k = min(max(int(_math.floor(e.center[2] / dz)), 0), nz - 1)
+        hit = lattice.get((i, k))
+        out.append(hit if hit is not None else _nearest(full_patches, *e.center))
+    return out
 
 
 def _wall_patches(surface: WallSurface, size: float) -> list[Patch]:

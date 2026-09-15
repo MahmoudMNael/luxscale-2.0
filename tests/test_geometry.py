@@ -155,6 +155,35 @@ def test_per_axis_spacing_matches_relux_8x8():
     assert int(wmeta["ny"]) == _fit_count(1.4, en12464_spacing(1.4))
 
 
+def test_radiosity_mesh_covers_wall_zones_and_samples_to_eval():
+    from app.domain.models import Wall
+    from app.services.geometry_service import (
+        generate_floor_evaluation_grid,
+        generate_wall_evaluation_grid,
+        generate_wall_radiosity_grid,
+        resolve_wall_border,
+        sample_plan_to_eval,
+        sample_wall_to_eval,
+    )
+
+    poly = [(0, 0), (4, 0), (4, 3), (0, 3)]
+    full, full_meta = generate_floor_evaluation_grid(poly, 0.0, 0.0)
+    eval_patches, _ = generate_floor_evaluation_grid(poly, 0.0, 0.5)
+    assert len(full) > len(eval_patches)
+    assert sum(p.area for p in full) > sum(p.area for p in eval_patches)
+    mapping = sample_plan_to_eval(full, full_meta, eval_patches)
+    assert len(mapping) == len(eval_patches)
+    assert all(0 <= m < len(full) for m in mapping)
+    wall = Wall(id="W1", start=(0.0, 0.0), end=(4.0, 0.0), length=4.0, normal=(0.0, 1.0), height=3.0)
+    border = resolve_wall_border(wall.length, wall.height, None)
+    wfull, wfull_meta = generate_wall_radiosity_grid(wall)
+    weval, _ = generate_wall_evaluation_grid(wall, border)
+    assert sum(p.area for p in wfull) > sum(p.area for p in weval)
+    wmap = sample_wall_to_eval(wall, wfull, wfull_meta, weval)
+    assert len(wmap) == len(weval)
+    assert all(0 <= m < len(wfull) for m in wmap)
+
+
 def test_horizontal_border_defaults_to_half_metre():
     from app.services.geometry_service import resolve_horizontal_border
 
