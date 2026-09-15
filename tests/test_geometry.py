@@ -4,7 +4,12 @@ import pytest
 
 from app.domain.exceptions import GeometryError
 from app.domain.models import FloorSurface, WallSurface
-from app.services.geometry_service import define_room, generate_patches
+from app.services.geometry_service import (
+    define_room,
+    generate_ceiling_radiosity_grid,
+    generate_floor_radiosity_grid,
+    generate_patches,
+)
 from app.services.vector_math import (
     EPS,
     clip_rect_to_polygon,
@@ -137,3 +142,25 @@ def test_shapely_clip_keeps_inner_corner():
     assert point_in_polygon((0.75, 0.75), l_poly)
     assert not point_in_polygon((2, 2), l_poly)
     assert signed_area([(0, 0), (1, 0), (1, 1), (0, 1)]) > 0
+
+
+def test_radiosity_grids_cover_full_polygon_uniformly():
+    poly = [(0, 0), (2, 0), (2, 2), (0, 2)]
+    floor = generate_floor_radiosity_grid(poly, 0.0, 0.5, 0.0)
+    ceiling = generate_ceiling_radiosity_grid(poly, 3.0, 0.5, 0.0)
+    assert len(floor) == 16  # 4x4 uniform cells over the full 2x2 polygon
+    assert len(ceiling) == 16
+    assert len({p.id for p in floor}) == 16
+    assert all(p.center[2] == 0.0 for p in floor)
+    assert all(p.center[2] == 3.0 for p in ceiling)
+    assert all(p.normal == (0.0, 0.0, 1.0) for p in floor)
+    assert all(p.normal == (0.0, 0.0, -1.0) for p in ceiling)
+    assert all(point_in_polygon((p.center[0], p.center[1]), poly) for p in floor)
+
+
+def test_radiosity_grid_l_shape_excludes_notch():
+    l_poly = [(0, 0), (4, 0), (4, 1), (1, 1), (1, 3), (0, 3)]
+    floor = generate_floor_radiosity_grid(l_poly, 0.0, 0.5, 0.0)
+    assert floor
+    assert all(point_in_polygon((p.center[0], p.center[1]), l_poly) for p in floor)
+    assert not any(p.center[0] > 1.0 and p.center[1] > 1.0 for p in floor)

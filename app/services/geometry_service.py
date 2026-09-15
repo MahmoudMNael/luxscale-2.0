@@ -97,6 +97,79 @@ def _ceiling_patches(surface: CeilingSurface, plane_z: float, border: float) -> 
     return patches
 
 
+def generate_uniform_surface_grid(
+    polygon: list[Vec2],
+    plane_z: float,
+    cell_size: float,
+    surface_type: str,
+    parent_id: str,
+    border: float = 0.0,
+    normal: tuple[float, float, float] = (0.0, 0.0, 1.0),
+    id_prefix: str = "src",
+) -> list[Patch]:
+    """Fine uniform mesh for radiosity sources, independent of EN 12464.
+
+    Tiles the inset bounding box with ``cell_size`` squares; keeps cell
+    centres inside the inset region. Same centre-test convention as the
+    evaluation grid, but resolution is fixed so floor/ceiling exchange
+    happens at wall-mesh density instead of ~0.4m reporting density.
+    """
+    domains = inset_rings(polygon, border)
+    if not domains or cell_size <= EPS:
+        return []
+    xs = [p[0] for ring in domains for p in ring]
+    ys = [p[1] for ring in domains for p in ring]
+    xmin, xmax, ymin, ymax = min(xs), max(xs), min(ys), max(ys)
+    width, height = xmax - xmin, ymax - ymin
+    if width <= EPS or height <= EPS:
+        return []
+    nx = max(1, math.ceil(width / cell_size - EPS))
+    ny = max(1, math.ceil(height / cell_size - EPS))
+    dx, dy = width / nx, height / ny
+    area = dx * dy
+    size = max(dx, dy)
+    patches: list[Patch] = []
+    n = 0
+    for j in range(ny):
+        cy = ymin + (j + 0.5) * dy
+        for i in range(nx):
+            cx = xmin + (i + 0.5) * dx
+            if not any(point_in_polygon((cx, cy), domain) for domain in domains):
+                continue
+            patches.append(
+                Patch(
+                    id=f"{id_prefix}-{n}",
+                    surface_type=surface_type,  # type: ignore[arg-type]
+                    parent_id=parent_id,
+                    center=(cx, cy, plane_z),
+                    normal=normal,
+                    area=area,
+                    size=size,
+                )
+            )
+            n += 1
+    return patches
+
+
+def generate_floor_radiosity_grid(
+    polygon: list[Vec2], plane_z: float, cell_size: float, border: float = 0.0
+) -> list[Patch]:
+    """Full-polygon fine floor mesh (border=0 keeps the wall-zone strip as reflector)."""
+    return generate_uniform_surface_grid(
+        polygon, plane_z, cell_size, "floor", "floor",
+        border=border, normal=(0.0, 0.0, 1.0), id_prefix="floor-src",
+    )
+
+
+def generate_ceiling_radiosity_grid(
+    polygon: list[Vec2], plane_z: float, cell_size: float, border: float = 0.0
+) -> list[Patch]:
+    return generate_uniform_surface_grid(
+        polygon, plane_z, cell_size, "ceiling", "ceiling",
+        border=border, normal=(0.0, 0.0, -1.0), id_prefix="ceiling-src",
+    )
+
+
 def generate_floor_evaluation_grid(
     polygon: list[Vec2], plane_z: float, border: float
 ) -> tuple[list[Patch], dict[str, float]]:

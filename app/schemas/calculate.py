@@ -123,7 +123,7 @@ class CalculateResponse(BaseModel):
     )
     totalFloorIlluminance: MatrixDto
     evaluation: EvaluationDto = Field(..., description="EN 12464 summary over the total floor matrix")
-    bounces: int = Field(..., description="Applied bounces (app_settings.NUM_BOUNCES)")
+    bounces: int = Field(..., description="Iterations used until floor change < BOUNCE_TOL_FLOOR_LUX (cap MAX_BOUNCES)")
     wallReflectance: float = Field(..., description="Applied wall reflectance (app_settings.WALL_REFLECTANCE_FACTOR)")
     floorReflectance: float = Field(
         default=0.2, description="Applied floor reflectance (app_settings.FLOOR_REFLECTANCE_FACTOR)"

@@ -45,6 +45,11 @@ def _root() -> RedirectResponse:
     return RedirectResponse("/demo/")
 
 
+@app.get("/demo-v2", include_in_schema=False)
+def _demo_v2() -> RedirectResponse:
+    return RedirectResponse("/demo/demo-v2.html")
+
+
 def _openapi() -> dict:
     if app.openapi_schema:
         return app.openapi_schema

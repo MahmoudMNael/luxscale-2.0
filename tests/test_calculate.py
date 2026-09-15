@@ -25,6 +25,41 @@ def _payload() -> CalculateRequest:
     )
 
 
+def _tiny_payload() -> CalculateRequest:
+    return CalculateRequest(
+        polygon=[Point2D(x=0, y=0), Point2D(x=2, y=0), Point2D(x=2, y=2), Point2D(x=0, y=2)],
+        height=2,
+        wallZone=0.0,
+        grid=GridInput(
+            x=AxisGrid(spacing=10, offsetBeginning=1, offsetEnding=1),
+            y=AxisGrid(spacing=10, offsetBeginning=1, offsetEnding=1),
+        ),
+    )
+
+
+def test_solver_override_flows_into_metadata():
+    result = calculate(_tiny_payload(), SAMPLE_IES, num_bounces=1, solver_method="neumann")
+    assert result.bounces == 1
+    assert len(result.fixtures) == 1
+    for matrix in result.indirectFloorMatrices.values():
+        assert matrix.metadata["bounces"] == 1
+        assert matrix.metadata["solver"] == "neumann"
+
+
+def test_converged_default_matches_high_fixed():
+    default = calculate(_tiny_payload(), SAMPLE_IES)
+    assert 1 <= default.bounces <= 25
+    fixed = calculate(_tiny_payload(), SAMPLE_IES, num_bounces=25)
+    assert default.evaluation.average == pytest.approx(fixed.evaluation.average, abs=0.2)
+    assert default.evaluation.minimum == pytest.approx(fixed.evaluation.minimum, abs=0.2)
+
+
+def test_coarse_and_fine_mesh_share_evaluation_grid():
+    fine = calculate(_tiny_payload(), SAMPLE_IES, num_bounces=2, use_fine_mesh=True)
+    coarse = calculate(_tiny_payload(), SAMPLE_IES, num_bounces=2, use_fine_mesh=False)
+    assert len(fine.floorPatches) == len(coarse.floorPatches)
+    assert [p.id for p in fine.floorPatches] == [p.id for p in coarse.floorPatches]
+    assert fine.evaluation.count == coarse.evaluation.count
 def test_luminaire_rotation_reaches_fixtures():
     payload = _payload()
     payload.luminaireRotation = 90.0
