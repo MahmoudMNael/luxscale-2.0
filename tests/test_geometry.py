@@ -152,7 +152,7 @@ def test_per_axis_spacing_matches_relux_8x8():
     wall = Wall(id="W1", start=(0.0, 0.0), end=(4.0, 0.0), length=4.0, normal=(0.0, 1.0), height=2.0)
     _, wmeta = generate_wall_evaluation_grid(wall, 0.3)
     assert int(wmeta["nx"]) == _fit_count(3.4, en12464_spacing(3.4))
-    assert int(wmeta["ny"]) == _fit_count(1.4, en12464_spacing(1.4))
+    assert int(wmeta["ny"]) == max(1, int(math.floor(1.4 / (3.4 / int(wmeta["nx"])) + 0.5)))
 
 
 def test_radiosity_mesh_covers_wall_zones_and_samples_to_eval():

@@ -5,7 +5,15 @@ import math
 from app.domain.models import Fixture, Matrix, Patch, RayGeometry, Vec3
 from app.services.fixture_service import luminous_opening
 from app.services.ies_service import get_candela
-from app.services.vector_math import EPS, Vec2, angle_deg, is_convex_polygon, segment_inside_room, wrap_deg
+from app.services.vector_math import (
+    EPS,
+    Vec2,
+    angle_deg,
+    is_convex_polygon,
+    segment_inside_room,
+    visibility_polygon,
+    wrap_deg,
+)
 
 
 def compute_ray_geometry(
@@ -38,16 +46,20 @@ def compute_ray_geometry(
 
 
 def compute_direct_illuminance(
-    fixture: Fixture, patch: Patch, room_polygon: list[Vec2] | None = None, *, c0_offset_deg: float = 0.0
+    fixture: Fixture,
+    patch: Patch,
+    room_polygon: list[Vec2] | object | None = None,
+    *,
+    c0_offset_deg: float = 0.0,
 ) -> float:
     _, elements = luminous_opening(fixture)
     n = len(elements)
-    blocked_room = room_polygon is not None and not is_convex_polygon(room_polygon)
+    vis_room = _visibility_for_direct(room_polygon)
     total = 0.0
     for origin in elements:
-        if blocked_room:
+        if vis_room is not None:
             if not segment_inside_room(
-                (origin[0], origin[1]), (patch.center[0], patch.center[1]), room_polygon
+                (origin[0], origin[1]), (patch.center[0], patch.center[1]), vis_room
             ):
                 continue
         ray = compute_ray_geometry(fixture, patch, origin, c0_offset_deg=c0_offset_deg)
@@ -65,9 +77,12 @@ def compute_direct_matrix(
     *,
     patch_size: float,
     wall_id: str | None = None,
-    room_polygon: list[Vec2] | None = None,
+    room_polygon: list[Vec2] | object | None = None,
     c0_offset_deg: float = 0.0,
 ) -> Matrix:
+    from shapely.geometry import LineString
+    from shapely.prepared import prep
+
     metadata: dict = {
         "kind": "direct",
         "surfaceType": surface_type,
@@ -76,8 +91,41 @@ def compute_direct_matrix(
     }
     if wall_id is not None:
         metadata["wallId"] = wall_id
+    vis_room = _visibility_for_direct(room_polygon)
     if room_polygon is not None:
         metadata["occlusion"] = "room-polygon"
-    return Matrix(
-        [compute_direct_illuminance(fixture, patch, room_polygon, c0_offset_deg=c0_offset_deg) for patch in patches], metadata
-    )
+    prepared = prep(vis_room) if vis_room is not None else None
+    _, elements = luminous_opening(fixture)
+    n = len(elements)
+    out: list[float] = []
+    for patch in patches:
+        total = 0.0
+        for origin in elements:
+            if prepared is not None:
+                if not prepared.covers(
+                    LineString([(origin[0], origin[1]), (patch.center[0], patch.center[1])])
+                ):
+                    continue
+            ray = compute_ray_geometry(fixture, patch, origin, c0_offset_deg=c0_offset_deg)
+            if ray.distance < EPS or ray.theta_incidence >= 90.0:
+                continue
+            intensity = get_candela(fixture.ies_profile, ray.theta_source, ray.phi_source) / n
+            total += (intensity / (ray.distance**2)) * math.cos(math.radians(ray.theta_incidence))
+        out.append(total)
+    return Matrix(out, metadata)
+
+
+def _visibility_for_direct(room_polygon: list[Vec2] | object | None) -> object | None:
+    """Buffered room for direct occlusion (Relux parity).
+
+    Wall centres sit exactly on the boundary; exact covers() flickers on
+    float noise and zeroes whole walls. 3 mm outward buffer absorbs noise
+    without changing real occlusion (same as indirect path).
+    """
+    if room_polygon is None:
+        return None
+    if isinstance(room_polygon, list):
+        if is_convex_polygon(room_polygon):
+            return None
+        return visibility_polygon(room_polygon)
+    return room_polygon

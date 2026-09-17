@@ -71,6 +71,8 @@ def load_ies(ies_text: str) -> IESProfile:
 
 
 def get_candela(profile: IESProfile, theta_vertical_deg: float, phi_horizontal_deg: float) -> float:
+    if theta_vertical_deg > profile.vertical_angles[-1] + EPS:
+        return 0.0
     iv0, iv1, tv = _bracket(profile.vertical_angles, theta_vertical_deg)
     scale = profile.multiplier * profile.ballast_factor * profile.ballast_lamp_factor * profile.flux_scale
     if len(profile.horizontal_angles) == 1:

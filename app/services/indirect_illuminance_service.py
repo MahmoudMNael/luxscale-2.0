@@ -67,18 +67,116 @@ def _wall_floor_visibility(
         return None, None
     if is_convex_polygon(polygon):
         return None, None
+    from shapely.geometry import LineString
+    from shapely.prepared import prep
+
     room = visibility_polygon(polygon)
+    prepared = prep(room)
     n_src = len(source_patches)
     n_floor = len(floor_patches)
     vis = np.ones((n_src, n_floor), dtype=bool)
     for j, target in enumerate(floor_patches):
-        tx, ty = target.center[0], target.center[1]
+        b = (target.center[0], target.center[1])
         for i, source in enumerate(source_patches):
-            if not segment_inside_room(
-                (source.center[0], source.center[1]), (tx, ty), room
+            if not prepared.covers(
+                LineString([(source.center[0], source.center[1]), b])
             ):
                 vis[i, j] = False
     return vis, room
+
+
+def _source_source_visibility(
+    source_patches: list[Patch],
+    polygon: list[Vec2],
+) -> "np.ndarray | None":
+    """Plan-view visibility between radiosity sources (Relux parity).
+
+    The F matrix previously assumed all patches see each other, leaking
+    inter-reflection through concave notches (22% of pairs in the L-case).
+    Binary mask with the same 3 mm buffered room as G; None when convex.
+    """
+    from shapely.geometry import LineString
+    from shapely.prepared import prep
+
+    if not source_patches or polygon is None:
+        return None
+    if is_convex_polygon(polygon):
+        return None
+    room = visibility_polygon(polygon)
+    prepared = prep(room)
+    n = len(source_patches)
+    # Plan-view visibility depends only on XY: patches stacked vertically
+    # share XY, so test unique positions (walls: ns, not ns*nz).
+    key_of: dict[tuple[float, float], int] = {}
+    uniq: list[tuple[float, float]] = []
+    idx: list[int] = []
+    for p in source_patches:
+        key = (round(p.center[0], 9), round(p.center[1], 9))
+        u = key_of.get(key)
+        if u is None:
+            u = len(uniq)
+            key_of[key] = u
+            uniq.append(key)
+        idx.append(u)
+    m = len(uniq)
+    vis_u = np.ones((m, m), dtype=bool)
+    for t in range(m):
+        b = uniq[t]
+        for i in range(m):
+            if i == t:
+                vis_u[i, t] = False
+                continue
+            if not prepared.covers(LineString([uniq[i], b])):
+                vis_u[i, t] = False
+    ii = np.asarray(idx, dtype=np.int64)
+    return vis_u[ii][:, ii]
+
+
+def _union_plan_visibility(
+    all_source_patches: list[Patch],
+    targets: dict[str, list[Patch]],
+    polygon: list[Vec2] | None,
+) -> "tuple[np.ndarray, np.ndarray | None, dict[tuple[float, float], int]]":
+    """Shared plan-view visibility over unique XY (Relux solver scale).
+
+    Returns ``(src_idx, vis_union_or_None, key_of)``. Targets index into the
+    same union, so F and all G sets cost ~mu^2 prepared-covers tests total.
+    ``None` when convex/unset (all visible)."""
+    from shapely.geometry import LineString
+    from shapely.prepared import prep
+
+    n_src = len(all_source_patches)
+    if not all_source_patches or polygon is None or is_convex_polygon(polygon):
+        return np.zeros(n_src, dtype=np.int64), None, {}
+    key_of: dict[tuple[float, float], int] = {}
+    uniq: list[tuple[float, float]] = []
+
+    def _take(x: float, y: float) -> int:
+        key = (round(x, 9), round(y, 9))
+        u = key_of.get(key)
+        if u is None:
+            u = len(uniq)
+            key_of[key] = u
+            uniq.append(key)
+        return u
+
+    src_idx = np.array([_take(p.center[0], p.center[1]) for p in all_source_patches], dtype=np.int64)
+    for tp in targets.values():
+        for p in tp:
+            _take(p.center[0], p.center[1])
+    room = visibility_polygon(polygon)
+    prepared = prep(room)
+    m = len(uniq)
+    vis = np.ones((m, m), dtype=bool)
+    for t in range(m):
+        b = uniq[t]
+        row = vis[:, t]
+        for i in range(m):
+            if i == t:
+                continue
+            if not prepared.covers(LineString([uniq[i], b])):
+                row[i] = False
+    return src_idx, vis, key_of
 
 
 def _segment_fraction(a: Vec2, b: Vec2, room) -> float:
@@ -216,7 +314,17 @@ def compute_indirect_per_target_per_origin(
     src_c = np.array([p.center for p in all_source_patches], dtype=np.float64)
     src_n = np.array([p.normal for p in all_source_patches], dtype=np.float64)
     src_a = np.array([p.area for p in all_source_patches], dtype=np.float64)
-    src_xy = [(p.center[0], p.center[1]) for p in all_source_patches]
+
+    # One shared plan-view visibility over the union of unique XY positions
+    # (walls share XY along their stack; floor/ceiling share plan XY).
+    # Slices serve both F and every G target set: ~mu^2 shapely tests total
+    # instead of n_src^2 + n_src*n_tgt_all.
+    uni_src_idx, uni_vis, uni_key_of = _union_plan_visibility(all_source_patches, targets, room_polygon)
+    if uni_vis is not None:
+        src_vis = uni_vis[uni_src_idx][:, uni_src_idx]
+        np.fill_diagonal(src_vis, False)
+    else:
+        src_vis = None
 
     F = np.zeros((n_src, n_src), dtype=np.float64)
     for t in range(n_src):
@@ -227,6 +335,8 @@ def compute_indirect_per_target_per_origin(
         cos1 = (line * src_n).sum(axis=1) / d
         cos2 = -(line * src_n[t]).sum(axis=1) / d
         ok = valid & (cos1 > 0.0) & (cos2 > 0.0)
+        if src_vis is not None:
+            ok = ok & src_vis[:, t]
         g = np.zeros_like(d2)
         g[ok] = src_a[ok] * cos1[ok] * cos2[ok] / (math.pi * d2[ok])
         g[t] = 0.0
@@ -245,12 +355,14 @@ def compute_indirect_per_target_per_origin(
             continue
         tgt_c = np.array([p.center for p in tgt_patches], dtype=np.float64)
         tgt_n = np.array([p.normal for p in tgt_patches], dtype=np.float64)
-        tgt_xy = [(p.center[0], p.center[1]) for p in tgt_patches]
-        vis, vis_room = (
-            _wall_floor_visibility(all_source_patches, tgt_patches, room_polygon)
-            if room_polygon is not None
-            else (None, None)
-        )
+        if uni_vis is not None:
+            t_idx = np.array(
+                [uni_key_of[(round(p.center[0], 9), round(p.center[1], 9))] for p in tgt_patches],
+                dtype=np.int64,
+            )
+            vis = uni_vis[uni_src_idx][:, t_idx]
+        else:
+            vis = None
         G = np.zeros((n_tgt, n_src), dtype=np.float64)
         for j in range(n_tgt):
             line = tgt_c[j] - src_c
@@ -263,15 +375,6 @@ def compute_indirect_per_target_per_origin(
             g = np.zeros_like(d2)
             g[ok] = src_a[ok] * cos1[ok] * cos2[ok] / (math.pi * d2[ok])
             if vis is not None:
-                gmax = float(g.max()) if g.size else 0.0
-                if gmax > 0.0:
-                    sig = ~vis[:, j] & (g > 0.01 * gmax)
-                    if bool(sig.any()):
-                        w = vis[:, j].astype(np.float64)
-                        for i in np.where(sig)[0]:
-                            w[i] = _segment_fraction(src_xy[int(i)], tgt_xy[j], vis_room)
-                        G[j, :] = g * w
-                        continue
                 G[j, :] = g * vis[:, j]
             else:
                 G[j, :] = g

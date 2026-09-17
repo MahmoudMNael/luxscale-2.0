@@ -184,10 +184,11 @@ def generate_floor_evaluation_grid(
 def generate_wall_evaluation_grid(
     wall: Wall, border: float
 ) -> tuple[list[Patch], dict[str, float]]:
-    """EN 12464 standard grid for a vertical wall rectangle (per-axis).
+    """EN 12464 evaluation grid for a vertical wall rectangle (Relux parity).
 
     Effective region = [border, L-border] x [border, H-border];
-    ``px = en12464_spacing(eff_L)``, ``py = en12464_spacing(eff_H)``.
+    ``px = en12464_spacing(eff_L)``, ``ns = ceil(eff_L / px)``,
+    then square cells ``nz = round(eff_H / dx)`` with ``dx = eff_L / ns``.
     Neglected ([]) when ``min(L, H) <= 1.0 m`` or the wall cannot keep
     ``border`` on both sides.
     """
@@ -228,8 +229,9 @@ def _wall_grid(wall: Wall, border: float, *, apply_neglect: bool) -> tuple[list[
         return [], m
     spacing = max(spacing_x, spacing_y)
     ns = max(1, math.ceil(eff_l / spacing_x - EPS))
-    nz = max(1, math.ceil(eff_h / spacing_y - EPS))
-    ds, dz = eff_l / ns, eff_h / nz
+    dx = eff_l / ns
+    nz = max(1, int(math.floor(eff_h / dx + 0.5)))
+    ds, dz = dx, eff_h / nz
     dx = wall.end[0] - wall.start[0]
     dy = wall.end[1] - wall.start[1]
     ux, uy = dx / length, dy / length
@@ -260,6 +262,292 @@ def _wall_grid(wall: Wall, border: float, *, apply_neglect: bool) -> tuple[list[
 
 def _lattice_map(patches: list[Patch], xs: list[float], ys: list[float]) -> dict[tuple[int, int], int]:
     return {(round(x), round(y)): n for n, (x, y) in enumerate(zip(xs, ys))}
+
+
+def generate_solver_plan_grid(
+    polygon: list[Vec2],
+    plane_z: float,
+    surface_type: str,
+    parent_id: str,
+    cell: float,
+    *,
+    normal: tuple[float, float, float],
+) -> tuple[list[Patch], dict[str, float]]:
+    """Relux-like independent solver mesh: fixed raster, full coverage.
+
+    ``nx = ceil(W / cell)``, ``ny = ceil(H / cell)`` over the room bbox,
+    cell centres kept when inside the polygon. No border inset, no neglect.
+    """
+    xs = [p[0] for p in polygon]
+    ys = [p[1] for p in polygon]
+    xmin, xmax, ymin, ymax = min(xs), max(xs), min(ys), max(ys)
+    width, height = xmax - xmin, ymax - ymin
+    if width <= EPS or height <= EPS or cell <= EPS:
+        m = _empty_meta()
+        return [], m
+    nx = max(1, math.ceil(width / cell - EPS))
+    ny = max(1, math.ceil(height / cell - EPS))
+    dx, dy = width / nx, height / ny
+    area = dx * dy
+    size = max(dx, dy)
+    patches: list[Patch] = []
+    n = 0
+    for j in range(ny):
+        cy = ymin + (j + 0.5) * dy
+        for i in range(nx):
+            cx = xmin + (i + 0.5) * dx
+            if not point_in_polygon((cx, cy), polygon):
+                continue
+            patches.append(
+                Patch(
+                    id=f"{parent_id}-{n}",
+                    surface_type=surface_type,  # type: ignore[arg-type]
+                    parent_id=parent_id,
+                    center=(cx, cy, plane_z),
+                    normal=normal,
+                    area=area,
+                    size=size,
+                )
+            )
+            n += 1
+    meta = {"spacing": cell, "spacingX": cell, "spacingY": cell,
+            "nx": float(nx), "ny": float(ny), "dx": dx, "dy": dy,
+            "xmin": xmin, "xmax": xmax, "ymin": ymin, "ymax": ymax, "border": 0.0}
+    return patches, meta
+
+
+def generate_solver_wall_grid(wall: Wall, cell: float) -> tuple[list[Patch], dict[str, float]]:
+    """Relux-like independent solver mesh for one wall: fixed raster.
+
+    ``ns = ceil(L / cell)``, ``nz = ceil(H / cell)``, full coverage from
+    ``(s=0, z=0)``. No border inset, no 1 m neglect: every wall reflects.
+    """
+    length, height = wall.length, wall.height
+    if length <= EPS or height <= EPS or cell <= EPS:
+        m = _empty_meta()
+        return [], m
+    ns = max(1, math.ceil(length / cell - EPS))
+    nz = max(1, math.ceil(height / cell - EPS))
+    ds, dz = length / ns, height / nz
+    dx = wall.end[0] - wall.start[0]
+    dy = wall.end[1] - wall.start[1]
+    ux, uy = dx / length, dy / length
+    patches: list[Patch] = []
+    n = 0
+    for k in range(nz):
+        z_mid = (k + 0.5) * dz
+        for i in range(ns):
+            s_mid = (i + 0.5) * ds
+            patches.append(
+                Patch(
+                    id=f"{wall.id}-s{n}",
+                    surface_type="wall",
+                    parent_id=wall.id,
+                    center=(wall.start[0] + ux * s_mid, wall.start[1] + uy * s_mid, z_mid),
+                    normal=(wall.normal[0], wall.normal[1], 0.0),
+                    area=ds * dz,
+                    size=max(ds, dz),
+                )
+            )
+            n += 1
+    meta = {"spacing": cell, "spacingX": cell, "spacingY": cell,
+            "nx": float(ns), "ny": float(nz), "dx": ds, "dy": dz,
+            "xmin": 0.0, "xmax": length, "ymin": 0.0, "ymax": height, "border": 0.0}
+    return patches, meta
+
+
+def build_plan_interp_weights(
+    full_patches: list[Patch],
+    full_meta: dict[str, float],
+    eval_patches: list[Patch],
+    *,
+    eval_dx: float = 0.0,
+    eval_dy: float = 0.0,
+) -> tuple[list[int], list[int], list[float], int, int]:
+    """CSR weights from solver plan mesh to eval centres (Relux measuring).
+
+    Area-average over solver cells whose centres fall inside the eval cell
+    footprint (Relux cell-average semantics, smooths fine-solver peaks);
+    falls back to bilinear at the centre when the footprint holds no solver
+    centre (eval finer than solver), then nearest centre. Rows sum to 1.
+    """
+    import math as _math
+
+    n_eval, n_full = len(eval_patches), len(full_patches)
+    indptr = [0]
+    indices: list[int] = []
+    data: list[float] = []
+    nx = int(full_meta.get("nx", 0))
+    ny = int(full_meta.get("ny", 0))
+    dx = float(full_meta.get("dx", 0.0))
+    dy = float(full_meta.get("dy", 0.0))
+    xmin = float(full_meta.get("xmin", 0.0))
+    ymin = float(full_meta.get("ymin", 0.0))
+    if not full_patches or nx <= 0 or ny <= 0 or dx <= EPS or dy <= EPS or n_eval == 0:
+        return [0] * (n_eval + 1), [], [], n_eval, n_full
+    lattice = _lattice_map(
+        full_patches,
+        [round((p.center[0] - xmin) / dx - 0.5) for p in full_patches],
+        [round((p.center[1] - ymin) / dy - 0.5) for p in full_patches],
+    )
+    for e in eval_patches:
+        taps = _footprint_taps_plan(
+            e.center[0], e.center[1], eval_dx, eval_dy,
+            xmin, ymin, dx, dy, nx, ny, lattice,
+        )
+        if taps is None:
+            fx = (e.center[0] - xmin) / dx - 0.5
+            fy = (e.center[1] - ymin) / dy - 0.5
+            i0, j0 = _math.floor(fx), _math.floor(fy)
+            tx, ty = fx - i0, fy - j0
+            cands = ((i0, j0, (1.0 - tx) * (1.0 - ty)), ((i0 + 1), j0, tx * (1.0 - ty)),
+                     (i0, j0 + 1, (1.0 - tx) * ty), (i0 + 1, j0 + 1, tx * ty))
+            taps = []
+            for ci, cj, w in cands:
+                if w <= 0.0:
+                    continue
+                hit = lattice.get((ci, cj))
+                if hit is not None:
+                    taps.append((hit, w))
+            if not taps:
+                taps = [(_nearest(full_patches, *e.center), 1.0)]
+            else:
+                s = sum(w for _, w in taps)
+                taps = [(h, w / s) for h, w in taps]
+        for h, w in taps:
+            indices.append(h)
+            data.append(w)
+        indptr.append(len(indices))
+    return indptr, indices, data, n_eval, n_full
+
+
+def _footprint_taps_plan(
+    cx: float, cy: float, ex: float, ey: float,
+    xmin: float, ymin: float, dx: float, dy: float,
+    nx: int, ny: int, lattice: dict[tuple[int, int], int],
+) -> list[tuple[int, float]] | None:
+    """Mean over solver cells with centres inside the eval footprint."""
+    import math as _math
+
+    if ex <= EPS or ey <= EPS:
+        return None
+    i_lo = max(0, int(_math.ceil((cx - ex / 2.0 - xmin) / dx - 0.5 - EPS)))
+    i_hi = min(nx - 1, int(_math.floor((cx + ex / 2.0 - xmin) / dx - 0.5 + EPS)))
+    j_lo = max(0, int(_math.ceil((cy - ey / 2.0 - ymin) / dy - 0.5 - EPS)))
+    j_hi = min(ny - 1, int(_math.floor((cy + ey / 2.0 - ymin) / dy - 0.5 + EPS)))
+    if i_hi < i_lo or j_hi < j_lo:
+        return None
+    hits = [lattice[(i, j)] for j in range(j_lo, j_hi + 1) for i in range(i_lo, i_hi + 1) if (i, j) in lattice]
+    if not hits:
+        return None
+    w = 1.0 / len(hits)
+    return [(h, w) for h in hits]
+
+
+def build_wall_interp_weights(
+    wall: Wall,
+    full_patches: list[Patch],
+    full_meta: dict[str, float],
+    eval_patches: list[Patch],
+    *,
+    eval_ds: float = 0.0,
+    eval_dz: float = 0.0,
+) -> tuple[list[int], list[int], list[float], int, int]:
+    """CSR weights from solver wall mesh to eval centres (Relux measuring).
+
+    Area-average over solver cells in the eval footprint; bilinear fallback
+    when the footprint holds none (eval finer than solver). Rows sum to 1.
+    """
+    import math as _math
+
+    n_eval, n_full = len(eval_patches), len(full_patches)
+    indptr = [0]
+    indices: list[int] = []
+    data: list[float] = []
+    length = wall.length
+    dx = wall.end[0] - wall.start[0]
+    dy = wall.end[1] - wall.start[1]
+    if length <= EPS or not full_patches or n_eval == 0:
+        return [0] * (n_eval + 1), [], [], n_eval, n_full
+    ux, uy = dx / length, dy / length
+    ns = int(full_meta.get("nx", 0))
+    nz = int(full_meta.get("ny", 0))
+    ds = float(full_meta.get("dx", 0.0))
+    dz = float(full_meta.get("dy", 0.0))
+    if ns <= 0 or nz <= 0 or ds <= EPS or dz <= EPS:
+        return [0] * (n_eval + 1), [], [], n_eval, n_full
+    lattice = _lattice_map(
+        full_patches,
+        [round(((p.center[0] - wall.start[0]) * ux + (p.center[1] - wall.start[1]) * uy) / ds - 0.5) for p in full_patches],
+        [round(p.center[2] / dz - 0.5) for p in full_patches],
+    )
+    for e in eval_patches:
+        s = (e.center[0] - wall.start[0]) * ux + (e.center[1] - wall.start[1]) * uy
+        taps = _footprint_taps_wall(s, e.center[2], eval_ds, eval_dz, ds, dz, ns, nz, lattice)
+        if taps is None:
+            fs = s / ds - 0.5
+            fz = e.center[2] / dz - 0.5
+            i0, k0 = _math.floor(fs), _math.floor(fz)
+            ts, tz = fs - i0, fz - k0
+            cands = ((i0, k0, (1.0 - ts) * (1.0 - tz)), ((i0 + 1), k0, ts * (1.0 - tz)),
+                     (i0, k0 + 1, (1.0 - ts) * tz), (i0 + 1, k0 + 1, ts * tz))
+            taps = []
+            for ci, ck, w in cands:
+                if w <= 0.0:
+                    continue
+                hit = lattice.get((ci, ck))
+                if hit is not None:
+                    taps.append((hit, w))
+            if not taps:
+                taps = [(_nearest(full_patches, *e.center), 1.0)]
+            else:
+                tot = sum(w for _, w in taps)
+                taps = [(h, w / tot) for h, w in taps]
+        for h, w in taps:
+            indices.append(h)
+            data.append(w)
+        indptr.append(len(indices))
+    return indptr, indices, data, n_eval, n_full
+
+
+def _footprint_taps_wall(
+    s: float, z: float, es: float, ez: float,
+    ds: float, dz: float, ns: int, nz: int,
+    lattice: dict[tuple[int, int], int],
+) -> list[tuple[int, float]] | None:
+    """Mean over solver wall cells with centres inside the eval footprint."""
+    import math as _math
+
+    if es <= EPS or ez <= EPS:
+        return None
+    i_lo = max(0, int(_math.ceil((s - es / 2.0) / ds - 0.5 - EPS)))
+    i_hi = min(ns - 1, int(_math.floor((s + es / 2.0) / ds - 0.5 + EPS)))
+    k_lo = max(0, int(_math.ceil((z - ez / 2.0) / dz - 0.5 - EPS)))
+    k_hi = min(nz - 1, int(_math.floor((z + ez / 2.0) / dz - 0.5 + EPS)))
+    if i_hi < i_lo or k_hi < k_lo:
+        return None
+    hits = [lattice[(i, k)] for k in range(k_lo, k_hi + 1) for i in range(i_lo, i_hi + 1) if (i, k) in lattice]
+    if not hits:
+        return None
+    w = 1.0 / len(hits)
+    return [(h, w) for h in hits]
+
+
+def apply_interp_weights(
+    values: list[float] | tuple[float, ...],
+    weights: tuple[list[int], list[int], list[float], int, int],
+) -> list[float]:
+    """Apply CSR interpolation weights to a solver-mesh value vector."""
+    indptr, indices, data, n_eval, _ = weights
+    if n_eval == 0:
+        return []
+    out: list[float] = []
+    for r in range(n_eval):
+        acc = 0.0
+        for t in range(indptr[r], indptr[r + 1]):
+            acc += data[t] * values[indices[t]]
+        out.append(acc)
+    return out
 
 
 def _nearest(values: list[Patch], cx: float, cy: float, cz: float) -> int:

@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import time
 
-from app.app_settings import C0_ORIENTATION_OFFSET_DEG, CEILING_REFLECTANCE_FACTOR, FLOOR_REFLECTANCE_FACTOR, MAINTENANCE_FACTOR, NUM_BOUNCES, PATCH_SIZE, WALL_REFLECTANCE_FACTOR, WORK_PLANE_HEIGHT
+from app.app_settings import C0_ORIENTATION_OFFSET_DEG, CEILING_REFLECTANCE_FACTOR, FLOOR_REFLECTANCE_FACTOR, MAINTENANCE_FACTOR, NUM_BOUNCES, PATCH_SIZE, SOLVER_CELL, WALL_REFLECTANCE_FACTOR, WORK_PLANE_HEIGHT
 from app.domain.exceptions import GeometryError
 from app.domain.models import Fixture, Matrix, Patch, Vec3, WallSurface
 from app.schemas.calculate import CalculateRequest, CalculateResponse, EvaluationDto, FixtureDto
@@ -11,7 +11,7 @@ from app.schemas.geometry import PatchDto, Vec3Dto
 from app.schemas.matrix import MatrixDto
 from app.services.direct_illuminance_service import compute_direct_matrix
 from app.services.fixture_service import generate_fixture_grid, luminous_opening
-from app.services.geometry_service import define_room, generate_ceiling_evaluation_grid, generate_floor_evaluation_grid, generate_wall_evaluation_grid, generate_wall_radiosity_grid, resolve_horizontal_border, resolve_wall_border, sample_plan_to_eval, sample_wall_to_eval
+from app.services.geometry_service import apply_interp_weights, build_plan_interp_weights, build_wall_interp_weights, define_room, generate_ceiling_evaluation_grid, generate_floor_evaluation_grid, generate_solver_plan_grid, generate_solver_wall_grid, generate_wall_evaluation_grid, resolve_horizontal_border, resolve_wall_border
 from app.services.ies_service import load_ies
 from app.services.indirect_illuminance_service import compute_indirect_per_target_per_origin
 from app.services.matrix_service import apply_maintenance_factor, sum_matrices
@@ -58,17 +58,19 @@ def calculate(payload: CalculateRequest, ies_text: str) -> CalculateResponse:
         wall_metas[wall.id] = meta
     floor_cell = floor_patches[0].size
     ceiling_patches, ceiling_meta = generate_ceiling_evaluation_grid(room.polygon, ceiling_h, ceiling_border)
-    floor_full, floor_full_meta = generate_floor_evaluation_grid(room.polygon, work_z, 0.0)
-    ceiling_full, ceiling_full_meta = generate_ceiling_evaluation_grid(room.polygon, ceiling_h, 0.0)
+    # Relux-like independent solver mesh: fixed raster, full coverage, every
+    # wall reflects (no 1 m neglect on the solver; neglect applies to eval
+    # reporting only). Physics runs here; eval grids sample via interpolation.
+    floor_full, floor_full_meta = generate_solver_plan_grid(
+        room.polygon, work_z, "floor", "floor", SOLVER_CELL, normal=(0.0, 0.0, 1.0))
+    ceiling_full, ceiling_full_meta = generate_solver_plan_grid(
+        room.polygon, ceiling_h, "ceiling", "ceiling", SOLVER_CELL, normal=(0.0, 0.0, -1.0))
+    if not floor_full:
+        raise GeometryError("No solver patches remain after clipping to the polygon.")
     wall_full: dict[str, list[Patch]] = {}
     wall_full_metas: dict[str, dict[str, float]] = {}
     for wall in room.walls:
-        if not wall_patches[wall.id]:
-            wall_full[wall.id] = []
-            wall_full_metas[wall.id] = {"spacing": 0.0, "nx": 0, "ny": 0, "dx": 0.0, "dy": 0.0,
-                                        "xmin": 0.0, "xmax": 0.0, "ymin": 0.0, "ymax": 0.0, "border": 0.0}
-            continue
-        patches, meta = generate_wall_radiosity_grid(wall)
+        patches, meta = generate_solver_wall_grid(wall, SOLVER_CELL)
         wall_full[wall.id] = patches
         wall_full_metas[wall.id] = meta
     _log.info(
@@ -173,32 +175,37 @@ def calculate(payload: CalculateRequest, ies_text: str) -> CalculateResponse:
         if not seeds:
             per_target_full = {tid: {} for tid in targets_full}
 
-    def _sample(values: list[float], mapping: list[int]) -> list[float]:
-        return [values[m] for m in mapping] if values else []
-
-    floor_map = sample_plan_to_eval(floor_full, floor_full_meta, floor_patches)
-    ceiling_map = sample_plan_to_eval(ceiling_full, ceiling_full_meta, ceiling_patches) if ceiling_patches and ceiling_full else []
-    wall_maps: dict[str, list[int]] = {}
+    floor_W = build_plan_interp_weights(
+        floor_full, floor_full_meta, floor_patches,
+        eval_dx=float(grid_meta.get("dx", 0.0)), eval_dy=float(grid_meta.get("dy", 0.0)))
+    ceiling_W = build_plan_interp_weights(
+        ceiling_full, ceiling_full_meta, ceiling_patches,
+        eval_dx=float(ceiling_meta.get("dx", 0.0)), eval_dy=float(ceiling_meta.get("dy", 0.0)),
+    ) if ceiling_patches and ceiling_full else ([0], [], [], 0, len(ceiling_full))
+    wall_W: dict[str, tuple] = {}
     for wall in room.walls:
         if wall_patches[wall.id] and wall_full[wall.id]:
-            wall_maps[wall.id] = sample_wall_to_eval(wall, wall_full[wall.id], wall_full_metas[wall.id], wall_patches[wall.id])
+            em = wall_metas[wall.id]
+            wall_W[wall.id] = build_wall_interp_weights(
+                wall, wall_full[wall.id], wall_full_metas[wall.id], wall_patches[wall.id],
+                eval_ds=float(em.get("dx", 0.0)), eval_dz=float(em.get("dy", 0.0)))
         else:
-            wall_maps[wall.id] = []
+            wall_W[wall.id] = ([0] * (len(wall_patches[wall.id]) + 1), [], [], len(wall_patches[wall.id]), len(wall_full[wall.id]))
 
-    def _indirect_matrices(tid: str, tgt: list[Patch], cell: float, mapping: list[int]) -> dict[str, Matrix]:
+    def _indirect_matrices(tid: str, tgt: list[Patch], cell: float, weights: tuple) -> dict[str, Matrix]:
         out: dict[str, Matrix] = {}
         per_origin = per_target_full.get(tid, {})
         for oid, vals in per_origin.items():
-            out[oid] = Matrix(_sample(list(vals), mapping), {
+            out[oid] = Matrix(apply_interp_weights(list(vals), weights), {
                 "kind": "indirect", "surfaceType": "floor" if tid == "floor" else ("ceiling" if tid == "ceiling" else "wall"),
                 "targetId": tid, "sourceWallId": oid, "patchSize": cell, "bounces": applied_bounces,
                 "wallReflectance": WALL_REFLECTANCE_FACTOR, "floorReflectance": FLOOR_REFLECTANCE_FACTOR,
-                "ceilingReflectance": CEILING_REFLECTANCE_FACTOR, "radiosity": "full-coverage",
+                "ceilingReflectance": CEILING_REFLECTANCE_FACTOR, "radiosity": "solver-interp",
             })
         return out
 
     raw_floor_direct = {
-        fid: Matrix(_sample(list(m.values), floor_map), {**m.metadata, "patchSize": floor_cell, "radiosity": "full-coverage"})
+        fid: Matrix(apply_interp_weights(list(m.values), floor_W), {**m.metadata, "patchSize": floor_cell, "radiosity": "solver-interp"})
         for fid, m in raw_floor_direct_full.items()
     }
     raw_wall_direct: dict[str, dict[str, Matrix]] = {}
@@ -209,21 +216,21 @@ def calculate(payload: CalculateRequest, ies_text: str) -> CalculateResponse:
             continue
         cell = patches[0].size
         raw_wall_direct[wall.id] = {
-            fid: Matrix(_sample(list(m.values), wall_maps[wall.id]), {**m.metadata, "patchSize": cell, "radiosity": "full-coverage"})
+            fid: Matrix(apply_interp_weights(list(m.values), wall_W[wall.id]), {**m.metadata, "patchSize": cell, "radiosity": "solver-interp"})
             for fid, m in raw_wall_direct_full.get(wall.id, {}).items()
         }
     raw_ceiling_direct = {
-        fid: Matrix(_sample(list(m.values), ceiling_map), {**m.metadata, "patchSize": ceiling_patches[0].size if ceiling_patches else full_cell, "radiosity": "full-coverage"})
+        fid: Matrix(apply_interp_weights(list(m.values), ceiling_W), {**m.metadata, "patchSize": ceiling_patches[0].size if ceiling_patches else full_cell, "radiosity": "solver-interp"})
         for fid, m in raw_ceiling_direct_full.items()
     } if ceiling_patches and ceiling_full else {}
 
-    raw_indirect_floor = _indirect_matrices("floor", floor_patches, floor_cell, floor_map)
-    raw_indirect_ceiling = _indirect_matrices("ceiling", ceiling_patches, ceiling_patches[0].size if ceiling_patches else 0.0, ceiling_map)
+    raw_indirect_floor = _indirect_matrices("floor", floor_patches, floor_cell, floor_W)
+    raw_indirect_ceiling = _indirect_matrices("ceiling", ceiling_patches, ceiling_patches[0].size if ceiling_patches else 0.0, ceiling_W)
     raw_indirect_walls: dict[str, dict[str, Matrix]] = {}
     for wall in room.walls:
         patches = wall_patches[wall.id]
         cell = patches[0].size if patches else 0.0
-        raw_indirect_walls[wall.id] = _indirect_matrices(wall.id, patches, cell, wall_maps[wall.id])
+        raw_indirect_walls[wall.id] = _indirect_matrices(wall.id, patches, cell, wall_W[wall.id])
 
     raw_total_floor = sum_matrices([*raw_floor_direct.values(), *raw_indirect_floor.values()]) if (raw_floor_direct or raw_indirect_floor) else Matrix([0.0] * len(floor_patches), {"kind": "raw-total"})
     total_floor = apply_maintenance_factor(raw_total_floor, mf)
