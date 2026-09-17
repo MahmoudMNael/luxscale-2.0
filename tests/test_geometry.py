@@ -46,8 +46,9 @@ def test_floor_patches_inset_rect_symmetric_centres():
         border=border,
     )
     width, height = 3.0, 2.0
-    nx = _fit_count(width, en12464_spacing(width))
-    ny = _fit_count(height, en12464_spacing(height))
+    _p = en12464_spacing(max(width, height))
+    nx = _fit_count(width, _p)
+    ny = _fit_count(height, _p)
     dx, dy = width / nx, height / ny
     xs = [p.center[0] for p in patches]
     ys = [p.center[1] for p in patches]
@@ -82,8 +83,9 @@ def test_floor_patches_inset_skips_l_inner_edge():
     ys = [p[1] for ring in domains for p in ring]
     xmin, ymin = min(xs), min(ys)
     width, height = max(xs) - xmin, max(ys) - ymin
-    dx = width / _fit_count(width, en12464_spacing(width))
-    dy = height / _fit_count(height, en12464_spacing(height))
+    _p = en12464_spacing(max(width, height))
+    dx = width / _fit_count(width, _p)
+    dy = height / _fit_count(height, _p)
     assert not any(p.center[0] > 3.0 and p.center[1] > 3.0 for p in patches)
     for p in patches:
         cx, cy = p.center[0], p.center[1]
@@ -139,20 +141,23 @@ def test_wall_evaluation_grid_15pct_capped_and_1m_neglect():
     assert meta["border"] == pytest.approx(min(0.15 * 1.01, 0.5))
 
 
-def test_per_axis_spacing_matches_relux_8x8():
+def test_single_spacing_matches_en12464():
     from app.services.geometry_service import generate_floor_evaluation_grid, generate_wall_evaluation_grid
     from app.domain.models import Wall
 
     demov1 = [(0, 0), (4.85, 0), (4.85, 5.26), (1.45, 5.26), (1.45, 4.33), (0.55, 4.33), (0.55, 1.63), (0, 1.63)]
     _, meta = generate_floor_evaluation_grid(demov1, 0.0, 0.5)
-    assert int(meta["nx"]) == 8
+    # bbox of inset ≈ 3.85 × 4.26 → d=4.26, p=en12464(4.26), nx=7, ny=8
+    _p = en12464_spacing(4.26)
+    assert int(meta["nx"]) == 7
     assert int(meta["ny"]) == 8
-    assert meta["spacingX"] == pytest.approx(en12464_spacing(3.85), rel=0.05)
-    assert meta["spacingY"] == pytest.approx(en12464_spacing(4.26), rel=0.05)
+    assert meta["spacingX"] == pytest.approx(_p, rel=0.05)
+    assert meta["spacingY"] == pytest.approx(_p, rel=0.05)
     wall = Wall(id="W1", start=(0.0, 0.0), end=(4.0, 0.0), length=4.0, normal=(0.0, 1.0), height=2.0)
     _, wmeta = generate_wall_evaluation_grid(wall, 0.3)
-    assert int(wmeta["nx"]) == _fit_count(3.4, en12464_spacing(3.4))
-    assert int(wmeta["ny"]) == max(1, int(math.floor(1.4 / (3.4 / int(wmeta["nx"])) + 0.5)))
+    _wp = en12464_spacing(max(3.4, 1.4))
+    assert int(wmeta["nx"]) == _fit_count(3.4, _wp)
+    assert int(wmeta["ny"]) == _fit_count(1.4, _wp)
 
 
 def test_radiosity_mesh_covers_wall_zones_and_samples_to_eval():

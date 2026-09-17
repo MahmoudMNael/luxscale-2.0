@@ -204,10 +204,16 @@ def calculate(payload: CalculateRequest, ies_text: str) -> CalculateResponse:
             })
         return out
 
+    # Exact analytic direct at the evaluation points (no solver-mesh
+    # interpolation smoothing, which lifts dark corners and clips peaks).
+    # Solver-mesh direct (raw_*_full above) is still used for the seeds.
     raw_floor_direct = {
-        fid: Matrix(apply_interp_weights(list(m.values), floor_W), {**m.metadata, "patchSize": floor_cell, "radiosity": "solver-interp"})
-        for fid, m in raw_floor_direct_full.items()
-    }
+        fixture.id: compute_direct_matrix(
+            fixture, floor_patches, "floor", patch_size=floor_cell,
+            room_polygon=room.polygon, c0_offset_deg=C0_ORIENTATION_OFFSET_DEG,
+        )
+        for fixture in fixtures
+    } if floor_patches else {}
     raw_wall_direct: dict[str, dict[str, Matrix]] = {}
     for wall in room.walls:
         patches = wall_patches[wall.id]
@@ -216,13 +222,20 @@ def calculate(payload: CalculateRequest, ies_text: str) -> CalculateResponse:
             continue
         cell = patches[0].size
         raw_wall_direct[wall.id] = {
-            fid: Matrix(apply_interp_weights(list(m.values), wall_W[wall.id]), {**m.metadata, "patchSize": cell, "radiosity": "solver-interp"})
-            for fid, m in raw_wall_direct_full.get(wall.id, {}).items()
+            fixture.id: compute_direct_matrix(
+                fixture, patches, "wall", patch_size=cell, wall_id=wall.id,
+                room_polygon=room.polygon, c0_offset_deg=C0_ORIENTATION_OFFSET_DEG,
+            )
+            for fixture in fixtures
         }
     raw_ceiling_direct = {
-        fid: Matrix(apply_interp_weights(list(m.values), ceiling_W), {**m.metadata, "patchSize": ceiling_patches[0].size if ceiling_patches else full_cell, "radiosity": "solver-interp"})
-        for fid, m in raw_ceiling_direct_full.items()
-    } if ceiling_patches and ceiling_full else {}
+        fixture.id: compute_direct_matrix(
+            fixture, ceiling_patches, "ceiling",
+            patch_size=ceiling_patches[0].size if ceiling_patches else full_cell,
+            room_polygon=room.polygon, c0_offset_deg=C0_ORIENTATION_OFFSET_DEG,
+        )
+        for fixture in fixtures
+    } if ceiling_patches else {}
 
     raw_indirect_floor = _indirect_matrices("floor", floor_patches, floor_cell, floor_W)
     raw_indirect_ceiling = _indirect_matrices("ceiling", ceiling_patches, ceiling_patches[0].size if ceiling_patches else 0.0, ceiling_W)

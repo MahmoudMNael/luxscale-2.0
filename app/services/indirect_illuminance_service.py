@@ -179,6 +179,84 @@ def _union_plan_visibility(
     return src_idx, vis, key_of
 
 
+def _tangent_frames(normals: "np.ndarray") -> "tuple[np.ndarray, np.ndarray]":
+    """Orthonormal tangent pair per patch normal for near-field subdivision.
+
+    Uses world-up (0,0,1), falling back to (1,0,0) for horizontal patches
+    so wall (vertical-normal) and floor/ceiling frames stay well-defined.
+    """
+    n = normals / np.maximum(np.linalg.norm(normals, axis=1, keepdims=True), EPS)
+    up = np.tile(np.array([0.0, 0.0, 1.0]), (len(n), 1))
+    flat = np.abs(n[:, 2]) > 0.9
+    up[flat] = np.array([1.0, 0.0, 0.0])
+    t1 = np.cross(up, n)
+    t1 /= np.maximum(np.linalg.norm(t1, axis=1, keepdims=True), EPS)
+    t2 = np.cross(n, t1)
+    return t1, t2
+
+
+def _refine_close_transfers(
+    g: "np.ndarray",
+    src_c: "np.ndarray",
+    src_n: "np.ndarray",
+    src_a: "np.ndarray",
+    src_t1: "np.ndarray",
+    src_t2: "np.ndarray",
+    tgt_point: "np.ndarray",
+    tgt_normal: "np.ndarray",
+    tgt_area: float,
+    tgt_t1: "np.ndarray",
+    tgt_t2: "np.ndarray",
+    close: "np.ndarray",
+) -> None:
+    """In-place 2x2 area-averaged correction for near-field point pairs.
+
+    Point-to-point ``A*cos1*cos2/(pi*d^2)`` overestimates when patches are
+    closer than ~2 patch sizes (worst at shared wall/floor edges). Splitting
+    both patches into 2x2 sub-patches and averaging the 16 sub-transfers
+    recovers most of the area integral at negligible cost since only close
+    pairs take this path. (Higher orders were trialled: the enclosure
+    conservation below renormalizes source rows, cancelling their extra
+    effect on room averages.)
+    """
+    if not bool(close.any()):
+        return
+    ds_t = math.sqrt(max(tgt_area, EPS))
+    tt1 = np.asarray(tgt_t1, dtype=np.float64).reshape(3)
+    tt2 = np.asarray(tgt_t2, dtype=np.float64).reshape(3)
+    tp = np.asarray(tgt_point, dtype=np.float64).reshape(3)
+    tn = np.asarray(tgt_normal, dtype=np.float64).reshape(3)
+    off_t = np.array([-0.25 * ds_t, 0.25 * ds_t])
+    tq = (
+        tp[None, None, :]
+        + off_t[:, None, None] * tt1[None, None, :]
+        + off_t[None, :, None] * tt2[None, None, :]
+    ).reshape(-1, 3)
+    idx = np.nonzero(close)[0]
+    for i in idx:
+        ds = math.sqrt(max(float(src_a[i]), EPS))
+        st1 = np.asarray(src_t1[i], dtype=np.float64).reshape(3)
+        st2 = np.asarray(src_t2[i], dtype=np.float64).reshape(3)
+        sc = np.asarray(src_c[i], dtype=np.float64).reshape(3)
+        o = np.array([-0.25 * ds, 0.25 * ds])
+        sp = (
+            sc[None, None, :]
+            + o[:, None, None] * st1[None, None, :]
+            + o[None, :, None] * st2[None, None, :]
+        ).reshape(-1, 3)
+        diff = tq[:, None, :] - sp[None, :, :]
+        d2 = np.einsum("qpd,qpd->qp", diff, diff)
+        valid = d2 >= EPS * EPS
+        d = np.sqrt(np.maximum(d2, EPS * EPS))
+        sn = src_n[i]
+        c1 = (diff * sn).sum(axis=2) / d
+        c2 = -(diff * tn).sum(axis=2) / d
+        ok = valid & (c1 > 0.0) & (c2 > 0.0)
+        sub = np.zeros_like(d2)
+        sub[ok] = (float(src_a[i]) / 4.0) * c1[ok] * c2[ok] / (math.pi * d2[ok])
+        g[i] = sub.sum() / 4.0
+
+
 def _segment_fraction(a: Vec2, b: Vec2, room) -> float:
     """Visible fraction of a plan-view segment: 1, 0.5 or 0.
 
@@ -326,6 +404,8 @@ def compute_indirect_per_target_per_origin(
     else:
         src_vis = None
 
+    src_t1, src_t2 = _tangent_frames(src_n)
+    src_ds = np.sqrt(np.maximum(src_a, EPS))
     F = np.zeros((n_src, n_src), dtype=np.float64)
     for t in range(n_src):
         line = src_c[t] - src_c
@@ -340,12 +420,30 @@ def compute_indirect_per_target_per_origin(
         g = np.zeros_like(d2)
         g[ok] = src_a[ok] * cos1[ok] * cos2[ok] / (math.pi * d2[ok])
         g[t] = 0.0
+        close = ok & (d < 2.0 * np.maximum(src_ds, src_ds[t]))
+        close[t] = False
+        _refine_close_transfers(
+            g, src_c, src_n, src_a, src_t1, src_t2,
+            src_c[t], src_n[t], float(src_a[t]), src_t1[t], src_t2[t], close,
+        )
         F[:, t] = g
 
-    I_mat = np.eye(n_src, dtype=np.float64)
-    A = I_mat - rho[:, None] * F
+    # Enclosure conservation: standard row sums Σ_t F[i,t]*A_t/A_i must be
+    # ≤ 1, but point sampling leaks (measured mean ≈ 1.05 on 0.3 m meshes),
+    # compounding ~5% excess per bounce. Scale each source row back so the
+    # room keeps exactly the energy it reflects (closed rooms sum to 1).
+    with np.errstate(divide="ignore", invalid="ignore"):
+        row_sum = (F * src_a[None, :]).sum(axis=1) / np.maximum(src_a, EPS)
+    conserve = np.minimum(1.0, 1.0 / np.maximum(row_sum, EPS))
+    F = F * conserve[:, None]
+
     seeds = np.array([origin_seeds[oid] for oid in interact], dtype=np.float64)
-    E_src = seeds @ np.linalg.inv(A)
+    # Neumann series honoring NUM_BOUNCES: E = seeds + (E*rho)@F iterated
+    # (num_bounces-1) times, final transfer to targets adds the last bounce.
+    # num_bounces=1 → single bounce; large N converges to the closed form.
+    E_src = seeds
+    for _ in range(max(0, num_bounces - 1)):
+        E_src = seeds + (E_src * rho[None, :]) @ F
 
     out: dict[str, dict[str, list[float]]] = {}
     for tid, tgt_patches in targets.items():
@@ -355,6 +453,8 @@ def compute_indirect_per_target_per_origin(
             continue
         tgt_c = np.array([p.center for p in tgt_patches], dtype=np.float64)
         tgt_n = np.array([p.normal for p in tgt_patches], dtype=np.float64)
+        tgt_a = np.array([p.area for p in tgt_patches], dtype=np.float64)
+        tgt_t1, tgt_t2 = _tangent_frames(tgt_n)
         if uni_vis is not None:
             t_idx = np.array(
                 [uni_key_of[(round(p.center[0], 9), round(p.center[1], 9))] for p in tgt_patches],
@@ -374,10 +474,17 @@ def compute_indirect_per_target_per_origin(
             ok = valid & (cos1 > 0.0) & (cos2 > 0.0)
             g = np.zeros_like(d2)
             g[ok] = src_a[ok] * cos1[ok] * cos2[ok] / (math.pi * d2[ok])
+            close = ok & (d < 2.0 * np.maximum(src_ds, math.sqrt(max(float(tgt_a[j]), EPS))))
+            _refine_close_transfers(
+                g, src_c, src_n, src_a, src_t1, src_t2,
+                tgt_c[j], tgt_n[j], float(tgt_a[j]), tgt_t1[j], tgt_t2[j], close,
+            )
             if vis is not None:
                 G[j, :] = g * vis[:, j]
             else:
                 G[j, :] = g
-        E_tgt = ((G * rho[None, :]) @ E_src.T).T
+        # Same source-side conservation as F: transfers leaving source i
+        # carry conserve[i].
+        E_tgt = (((G * conserve[None, :]) * rho[None, :]) @ E_src.T).T
         out[tid] = {oid: E_tgt[i].tolist() for i, oid in enumerate(interact)}
     return out

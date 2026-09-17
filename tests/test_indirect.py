@@ -19,23 +19,26 @@ def _patch(pid, surface, parent, center, normal) -> Patch:
 
 
 def test_single_wall_seed_matches_analytic_form_factor():
+    # Far-field pair (d >> patch size) so the point form factor is exact:
+    # line=(5,0,-1), d^2=26, cos1=5/d, cos2=1/d.
     src = [_patch("w0", "wall", "W1", (0.0, 0.0, 1.0), (1.0, 0.0, 0.0))]
-    floor = [_patch("f0", "floor", "floor", (1.0, 0.0, 0.0), (0.0, 0.0, 1.0))]
+    floor = [_patch("f0", "floor", "floor", (5.0, 0.0, 0.0), (0.0, 0.0, 1.0))]
     out = compute_indirect_floor_per_origin(
         src, {"W1": [1000.0]}, floor, 0.5, 1, None, floor_reflectance=0.0, ceiling_reflectance=0.0
     )
-    assert out["W1"] == pytest.approx([1000.0 * 0.5 / (4.0 * math.pi)])
+    assert out["W1"] == pytest.approx([1000.0 * 0.5 * (5.0 / 26.0) / (math.pi * 26.0)])
 
 
 def test_facing_walls_boost_floor_indirect():
     a = _patch("w0", "wall", "W1", (0.0, 0.0, 1.0), (1.0, 0.0, 0.0))
     b = _patch("w1", "wall", "W2", (1.0, 0.0, 1.0), (-1.0, 0.0, 0.0))
     floor = [_patch("f0", "floor", "floor", (0.5, 2.0, 0.0), (0.0, 0.0, 1.0))]
+    # Second-order a→b→floor needs at least 2 bounces to appear.
     one = compute_indirect_floor_per_origin(
-        [a], {"W1": [1000.0]}, floor, 0.5, 1, None, floor_reflectance=0.0, ceiling_reflectance=0.0
+        [a], {"W1": [1000.0]}, floor, 0.5, 2, None, floor_reflectance=0.0, ceiling_reflectance=0.0
     )
     two = compute_indirect_floor_per_origin(
-        [a, b], {"W1": [1000.0, 0.0]}, floor, 0.5, 1, None, floor_reflectance=0.0, ceiling_reflectance=0.0
+        [a, b], {"W1": [1000.0, 0.0]}, floor, 0.5, 2, None, floor_reflectance=0.0, ceiling_reflectance=0.0
     )
     assert two["W1"][0] > one["W1"][0] > 0.0
 

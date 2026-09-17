@@ -124,9 +124,10 @@ def generate_floor_evaluation_grid(
 ) -> tuple[list[Patch], dict[str, float]]:
     """EN 12464 standard grid for horizontal surfaces (Relux-style per-axis).
 
-    Effective region = polygon inset by ``border``; per-axis maxima
-    ``px = en12464_spacing(width)``, ``py = en12464_spacing(height)``,
-    ``nx = ceil(width / px)``, ``ny = ceil(height / py)``, cell centres
+    Effective region = polygon inset by ``border``; single spacing per
+    EN 12464-1 (d = longer side of the calculation area)
+    ``p = en12464_spacing(max(width, height))``,
+    ``nx = ceil(width / p)``, ``ny = ceil(height / p)``, cell centres
     kept when inside the inset region. A surface that cannot keep
     ``border`` on both sides yields [].
     """
@@ -142,16 +143,16 @@ def generate_floor_evaluation_grid(
         m = _empty_meta()
         m.update({"xmin": min(xs), "xmax": max(xs), "ymin": min(ys), "ymax": max(ys), "border": border})
         return [], m
-    spacing_x = en12464_spacing(width)
-    spacing_y = en12464_spacing(height)
-    if spacing_x <= EPS or spacing_y <= EPS:
+    spacing = en12464_spacing(max(width, height))
+    if spacing <= EPS:
         m = _empty_meta()
         m.update({"xmin": min(xs), "xmax": max(xs), "ymin": min(ys), "ymax": max(ys), "border": border})
         return [], m
-    spacing = max(spacing_x, spacing_y)
+    spacing_x = spacing
+    spacing_y = spacing
     xmin, xmax, ymin, ymax = min(xs), max(xs), min(ys), max(ys)
-    nx = max(1, math.ceil(width / spacing_x - EPS))
-    ny = max(1, math.ceil(height / spacing_y - EPS))
+    nx = max(1, math.ceil(width / spacing - EPS))
+    ny = max(1, math.ceil(height / spacing - EPS))
     dx, dy = width / nx, height / ny
     area = dx * dy
     size = max(dx, dy)
@@ -187,8 +188,9 @@ def generate_wall_evaluation_grid(
     """EN 12464 evaluation grid for a vertical wall rectangle (Relux parity).
 
     Effective region = [border, L-border] x [border, H-border];
-    ``px = en12464_spacing(eff_L)``, ``ns = ceil(eff_L / px)``,
-    then square cells ``nz = round(eff_H / dx)`` with ``dx = eff_L / ns``.
+    single spacing per EN 12464-1 (d = longer side of the wall
+    calculation area) ``p = en12464_spacing(max(eff_L, eff_H))``,
+    ``ns = ceil(eff_L / p)``, ``nz = ceil(eff_H / p)``.
     Neglected ([]) when ``min(L, H) <= 1.0 m`` or the wall cannot keep
     ``border`` on both sides.
     """
@@ -221,17 +223,16 @@ def _wall_grid(wall: Wall, border: float, *, apply_neglect: bool) -> tuple[list[
         m = _empty_meta()
         m["border"] = border
         return [], m
-    spacing_x = en12464_spacing(eff_l)
-    spacing_y = en12464_spacing(eff_h)
-    if spacing_x <= EPS or spacing_y <= EPS:
+    spacing = en12464_spacing(max(eff_l, eff_h))
+    if spacing <= EPS:
         m = _empty_meta()
         m["border"] = border
         return [], m
-    spacing = max(spacing_x, spacing_y)
-    ns = max(1, math.ceil(eff_l / spacing_x - EPS))
-    dx = eff_l / ns
-    nz = max(1, int(math.floor(eff_h / dx + 0.5)))
-    ds, dz = dx, eff_h / nz
+    spacing_x = spacing
+    spacing_y = spacing
+    ns = max(1, math.ceil(eff_l / spacing - EPS))
+    nz = max(1, math.ceil(eff_h / spacing - EPS))
+    ds, dz = eff_l / ns, eff_h / nz
     dx = wall.end[0] - wall.start[0]
     dy = wall.end[1] - wall.start[1]
     ux, uy = dx / length, dy / length
