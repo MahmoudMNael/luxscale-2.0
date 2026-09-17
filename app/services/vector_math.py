@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import math
 
-from shapely.geometry import GeometryCollection, MultiPolygon, Point, Polygon, box
+from shapely.geometry import GeometryCollection, LineString, MultiPolygon, Point, Polygon, box
 from shapely.geometry.base import BaseGeometry
+from shapely.prepared import prep
 
 EPS = 1e-9
 Vec2 = tuple[float, float]
@@ -39,6 +40,21 @@ def angle_deg(a: Vec3, b: Vec3) -> float:
 
 def wrap_deg(phi: float) -> float:
     return phi % 360.0
+
+
+def en12464_spacing(d: float) -> float:
+    """EN 12464-1 maximum calculation-grid spacing: p = 0.2 × 5^log10(d)."""
+    if d <= EPS:
+        return 0.0
+    return 0.2 * 5.0 ** math.log10(d)
+    # return 0.4
+
+
+def perimeter_border(shortest: float) -> float:
+    """EN 12464-1 15% rule: excluded strip = 15% of shortest side, max 0.5 m."""
+    if shortest <= EPS:
+        return 0.0
+    return min(0.15 * shortest, 0.5)
 
 
 def _room(polygon: list[Vec2]) -> Polygon:
@@ -92,9 +108,55 @@ def _rings(geom: BaseGeometry) -> list[list[Vec2]]:
     return []
 
 
+def inset_rings(polygon: list[Vec2], border: float) -> list[list[Vec2]]:
+    """Interior offset of the room polygon. Empty if the inset collapses."""
+    if border <= EPS:
+        ring = _close_ring(polygon)
+        return [ring] if len(ring) >= 3 else []
+    return _rings(_room(polygon).buffer(-border, join_style=2, mitre_limit=5.0))
+
+
+def _close_ring(polygon: list[Vec2]) -> list[Vec2]:
+    if len(polygon) >= 2 and polygon[0] == polygon[-1]:
+        return list(polygon[:-1])
+    return list(polygon)
+
+
 def clip_rect_to_polygon(rect: tuple[float, float, float, float], polygon: list[Vec2]) -> list[list[Vec2]]:
     """Return intersection rings of an axis-aligned cell with the room polygon."""
     xmin, ymin, xmax, ymax = rect
     if xmax - xmin < EPS or ymax - ymin < EPS:
         return []
     return _rings(box(xmin, ymin, xmax, ymax).intersection(_room(polygon)))
+
+
+def room_polygon(polygon: list[Vec2]) -> Polygon:
+    """Prepared-room polygon for visibility tests (buffer(0) cleans bowties)."""
+    return _room(polygon)
+
+
+def visibility_polygon(polygon: list[Vec2], tol: float = 3e-3) -> Polygon:
+    """Room polygon with small outward buffer for boundary-tolerance checks.
+
+    Wall patch centres sit on the room boundary.  ``covers(LineString(...))``
+    can reject legitimate segments starting there due to floating-point noise.
+    A small outward buffer absorbs this without changing real occlusion.
+    """
+    return _room(polygon).buffer(tol, join_style=2, mitre_limit=5.0)
+
+
+def is_convex_polygon(polygon: list[Vec2]) -> bool:
+    """Fast path: convex rooms never occlude, so skip segment tests."""
+    poly = _room(polygon)
+    if poly.is_empty:
+        return True
+    return bool(poly.equals(poly.convex_hull))
+
+
+def segment_inside_room(a: Vec2, b: Vec2, room: Polygon | list[Vec2]) -> bool:
+    """True when the plan-view segment stays inside the room (walls block otherwise)."""
+    poly = _room(room) if isinstance(room, list) else room
+    if poly.is_empty:
+        return False
+    return bool(prep(poly).covers(LineString([a, b])))
+

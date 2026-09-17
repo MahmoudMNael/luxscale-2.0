@@ -1,18 +1,74 @@
+from pathlib import Path
+
+import pytest
+
 from app.domain.exceptions import IesParseError, NoFixturesError
-from app.services.fixture_service import generate_fixture_grid
+from app.domain.models import Fixture, Patch
+from app.services.direct_illuminance_service import compute_direct_illuminance
+from app.services.fixture_service import generate_fixture_grid, luminous_opening
 from app.services.geometry_service import define_room
-from app.services.ies_service import get_candela, load_ies
+from app.services.ies_service import _zonal_lumens, get_candela, load_ies
 from app.schemas.grid import AxisGrid, GridInput
-from tests.ies_sample import SAMPLE_IES
+from tests.ies_sample import SAMPLE_IES, ies_with
+
+_DEMO_IES = Path(__file__).resolve().parents[1] / "demo" / "sample.ies"
+
+
+def _downlight(profile, z=3.0) -> Fixture:
+    return Fixture(
+        id="F1",
+        position=(0.0, 0.0, z),
+        aim_direction=(0.0, 0.0, -1.0),
+        rotation=0.0,
+        ies_profile=profile,
+    )
+
+
+def _nadir_patch() -> Patch:
+    return Patch(
+        id="p",
+        surface_type="floor",
+        parent_id="floor",
+        center=(0.0, 0.0, 0.0),
+        normal=(0.0, 0.0, 1.0),
+        area=1.0,
+        size=1.0,
+    )
 
 
 def test_load_type_c_and_interpolate():
     profile = load_ies(SAMPLE_IES)
     assert profile.multiplier == 1.0
+    k = profile.flux_scale
     nadir = get_candela(profile, 0, 0)
     mid = get_candela(profile, 45, 90)
-    assert nadir == 1000
-    assert 700 == mid or abs(mid - 700) < 1e-9
+    assert nadir == pytest.approx(1000 * k)
+    assert mid == pytest.approx(700 * k)
+
+
+def test_relative_flux_matches_header_lumens():
+    profile = load_ies(SAMPLE_IES)
+    phi = _zonal_lumens(profile.vertical_angles, profile.horizontal_angles, profile.candela_table)
+    assert phi * profile.multiplier * profile.flux_scale == pytest.approx(1000)
+    assert profile.flux_scale != pytest.approx(1.0)
+
+
+def test_absolute_photometry_skips_flux_scale():
+    profile = load_ies(ies_with(lumens=-1))
+    assert profile.flux_scale == 1.0
+    assert get_candela(profile, 0, 0) == pytest.approx(1000)
+
+
+def test_ballast_factor_scales_candela():
+    full = load_ies(SAMPLE_IES)
+    half = load_ies(ies_with(ballast=0.5))
+    assert get_candela(half, 0, 0) == pytest.approx(get_candela(full, 0, 0) * 0.5)
+
+
+def test_feet_opening_converted_to_metres():
+    profile = load_ies(ies_with(units=1, width=2, length=2))
+    assert profile.width == pytest.approx(0.6096)
+    assert profile.length == pytest.approx(0.6096)
 
 
 def test_reject_tilt_include():
@@ -34,6 +90,9 @@ def test_fixture_grid_and_empty():
     fixtures = generate_fixture_grid(room, grid, room.height, ies)
     assert fixtures
     assert all(f.position[2] == 3 for f in fixtures)
+    hung = load_ies(ies_with(height=0.2))
+    dropped = generate_fixture_grid(room, grid, room.height, hung)
+    assert all(f.position[2] == pytest.approx(2.9) for f in dropped)
     miss = GridInput(
         x=AxisGrid(spacing=10, offsetBeginning=9, offsetEnding=9),
         y=AxisGrid(spacing=10, offsetBeginning=9, offsetEnding=9),
@@ -43,3 +102,85 @@ def test_fixture_grid_and_empty():
     except NoFixturesError:
         return
     raise AssertionError("expected NoFixturesError")
+
+
+def test_zero_opening_is_one_element_at_centre():
+    corners, elements = luminous_opening(_downlight(load_ies(SAMPLE_IES)))
+    assert len(corners) == 4
+    assert elements == [(0.0, 0.0, 3.0)]
+    ies = load_ies(SAMPLE_IES)
+    assert compute_direct_illuminance(_downlight(ies), _nadir_patch()) == pytest.approx(
+        get_candela(ies, 0, 0) / 9
+    )
+
+
+def test_panel_opening_corners_and_elements():
+    profile = load_ies(ies_with(width=0.55, length=0.55))
+    corners, elements = luminous_opening(_downlight(profile))
+    assert len(corners) == 4
+    assert len(elements) == 9
+    xs = [c[0] for c in corners]
+    ys = [c[1] for c in corners]
+    assert max(xs) - min(xs) == pytest.approx(0.55)
+    assert max(ys) - min(ys) == pytest.approx(0.55)
+    assert sum(e[0] for e in elements) / 9 == pytest.approx(0.0)
+    assert sum(e[1] for e in elements) / 9 == pytest.approx(0.0)
+
+
+def test_area_source_nadir_below_point_source():
+    point = _downlight(load_ies(SAMPLE_IES))
+    panel = _downlight(load_ies(ies_with(width=0.55, length=0.55)))
+    e_point = compute_direct_illuminance(point, _nadir_patch())
+    e_panel = compute_direct_illuminance(panel, _nadir_patch())
+    assert e_panel < e_point
+    assert e_panel > 0
+
+
+def test_demo_sample_ies_opening():
+    profile = load_ies(_DEMO_IES.read_text())
+    assert profile.width == pytest.approx(0.55)
+    assert profile.length == pytest.approx(0.55)
+    assert profile.height == pytest.approx(0.011)
+    assert profile.ballast_factor == pytest.approx(1.0)
+    assert 0.5 < profile.flux_scale < 2.0
+    _, elements = luminous_opening(_downlight(profile, z=3.0 - profile.height / 2.0))
+    assert len(elements) == 9
+
+
+def _off_axis_patch() -> Patch:
+    return Patch(
+        id="q",
+        surface_type="floor",
+        parent_id="floor",
+        center=(1.0, 0.0, 0.0),
+        normal=(0.0, 0.0, 1.0),
+        area=1.0,
+        size=1.0,
+    )
+
+
+def test_c0_offset_default_is_zero():
+    profile = load_ies(_DEMO_IES.read_text())
+    fix = _downlight(profile)
+    assert compute_direct_illuminance(fix, _off_axis_patch()) == pytest.approx(
+        compute_direct_illuminance(fix, _off_axis_patch(), c0_offset_deg=0.0)
+    )
+
+
+def test_c0_offset_shifts_asymmetric_direct():
+    profile = load_ies(_DEMO_IES.read_text())
+    fix = _downlight(profile)
+    patch = _off_axis_patch()
+    e0 = compute_direct_illuminance(fix, patch, c0_offset_deg=0.0)
+    e90 = compute_direct_illuminance(fix, patch, c0_offset_deg=90.0)
+    assert e0 > 0 and e90 > 0
+    assert e90 != pytest.approx(e0)
+
+
+def test_c0_offset_irrelevant_for_symmetric_profile():
+    profile = load_ies(SAMPLE_IES)
+    fix = _downlight(profile)
+    patch = _off_axis_patch()
+    assert compute_direct_illuminance(fix, patch, c0_offset_deg=90.0) == pytest.approx(
+        compute_direct_illuminance(fix, patch, c0_offset_deg=0.0)
+    )

@@ -28,7 +28,7 @@ class Room:
 @dataclass(frozen=True)
 class Patch:
     id: str
-    surface_type: Literal["floor", "wall"]
+    surface_type: Literal["floor", "wall", "ceiling"]
     parent_id: str
     center: Vec3
     normal: Vec3
@@ -42,6 +42,12 @@ class IESProfile:
     horizontal_angles: list[float]
     candela_table: list[list[float]]
     multiplier: float
+    ballast_factor: float
+    ballast_lamp_factor: float
+    flux_scale: float
+    width: float
+    length: float
+    height: float
 
 
 @dataclass(frozen=True)
@@ -71,6 +77,12 @@ class RayGeometry:
 class FloorSurface:
     polygon: list[Vec2]
     type: Literal["floor"] = "floor"
+
+
+@dataclass(frozen=True)
+class CeilingSurface:
+    polygon: list[Vec2]
+    type: Literal["ceiling"] = "ceiling"
 
 
 @dataclass(frozen=True)

@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import math
+
 from app.domain.exceptions import NoFixturesError
-from app.domain.models import Fixture, IESProfile, Room
+from app.domain.models import Fixture, IESProfile, Room, Vec3
 from app.schemas.grid import GridInput
 from app.services.vector_math import EPS, normalize, point_in_polygon
+
+_ELEMENT = 0.2
 
 
 def generate_fixture_grid(
@@ -28,7 +32,7 @@ def generate_fixture_grid(
             fixtures.append(
                 Fixture(
                     id=f"F{n}",
-                    position=(x, y, mounting_height),
+                    position=(x, y, mounting_height - ies_profile.height / 2.0),
                     aim_direction=aim,
                     rotation=rotation,
                     ies_profile=ies_profile,
@@ -38,6 +42,35 @@ def generate_fixture_grid(
     if not fixtures:
         raise NoFixturesError("No fixtures fall inside the room polygon for the given grid.")
     return fixtures
+
+
+def luminous_opening(fixture: Fixture) -> tuple[list[Vec3], list[Vec3]]:
+    # ponytail: rectangle in the aim-perpendicular plane only; 5-face box if a tall opening emits at 90°.
+    cx, cy, cz = fixture.position
+    length, width = fixture.ies_profile.length, fixture.ies_profile.width
+    rot = math.radians(fixture.rotation)
+    ux, uy = math.cos(rot), math.sin(rot)
+    vx, vy = -math.sin(rot), math.cos(rot)
+    hl, hw = length / 2.0, width / 2.0
+    corners = [
+        (cx - ux * hl - vx * hw, cy - uy * hl - vy * hw, cz),
+        (cx + ux * hl - vx * hw, cy + uy * hl - vy * hw, cz),
+        (cx + ux * hl + vx * hw, cy + uy * hl + vy * hw, cz),
+        (cx - ux * hl + vx * hw, cy - uy * hl + vy * hw, cz),
+    ]
+    nx = max(1, math.ceil(length / _ELEMENT - EPS))
+    ny = max(1, math.ceil(width / _ELEMENT - EPS))
+    dx, dy = length / nx, width / ny
+    elements = [
+        (
+            cx + ux * ((i + 0.5) * dx - hl) + vx * ((j + 0.5) * dy - hw),
+            cy + uy * ((i + 0.5) * dx - hl) + vy * ((j + 0.5) * dy - hw),
+            cz,
+        )
+        for j in range(ny)
+        for i in range(nx)
+    ]
+    return corners, elements
 
 
 def _axis(lo: float, hi: float, spacing: float, offset_beginning: float, offset_ending: float) -> list[float]:

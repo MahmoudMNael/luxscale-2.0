@@ -18,8 +18,8 @@ class Vec3Dto(BaseModel):
 
 class PatchDto(BaseModel):
     id: str
-    surfaceType: Literal["floor", "wall"]
-    parentId: str = Field(..., description="'floor' or the wall id")
+    surfaceType: Literal["floor", "wall", "ceiling"]
+    parentId: str = Field(..., description="'floor', 'ceiling' or the wall id")
     center: Vec3Dto
     normal: Vec3Dto
     area: float = Field(..., description="Patch area, m²")

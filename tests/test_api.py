@@ -27,7 +27,12 @@ def test_calculate_200():
     assert response.headers.get("X-Request-ID")
     body = response.json()
     assert body["fixtures"]
-    assert body["fixtures"][0]["id"]
+    fixture = body["fixtures"][0]
+    assert fixture["id"]
+    assert len(fixture["corners"]) == 4
+    assert len(fixture["elements"]) == 1
+    assert fixture["length"] == 0
+    assert fixture["width"] == 0
     assert body["totalFloorIlluminance"]["values"]
     assert max(body["totalFloorIlluminance"]["values"]) > 0
 

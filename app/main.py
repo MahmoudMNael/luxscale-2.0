@@ -24,6 +24,7 @@ from app.schemas.calculate import CalculateRequest
 configure_logging()
 
 _DEMO_DIR = Path(__file__).resolve().parents[1] / "demo"
+_DEMO_V2_DIR = Path(__file__).resolve().parents[1] / "demo-v2"
 
 app = FastAPI(title="LuxScale Lighting Engine", version="2.0.0")
 app.add_middleware(
@@ -80,3 +81,5 @@ def _openapi() -> dict:
 
 app.openapi = _openapi
 app.mount("/demo", StaticFiles(directory=_DEMO_DIR, html=True), name="demo")
+if _DEMO_V2_DIR.is_dir():
+    app.mount("/demo-v2", StaticFiles(directory=_DEMO_V2_DIR, html=True), name="demo-v2")

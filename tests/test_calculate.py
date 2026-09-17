@@ -1,3 +1,5 @@
+import math
+
 import pytest
 
 from app.app_settings import MAINTENANCE_FACTOR, WORK_PLANE_HEIGHT
@@ -5,13 +7,18 @@ from app.schemas.calculate import CalculateRequest
 from app.schemas.grid import AxisGrid, GridInput
 from app.schemas.geometry import Point2D
 from app.services.calculate_service import calculate
+from app.services.vector_math import EPS, en12464_spacing
 from tests.ies_sample import SAMPLE_IES
+
+WALL_ZONE = 0.25
 
 
 def _payload() -> CalculateRequest:
     return CalculateRequest(
         polygon=[Point2D(x=0, y=0), Point2D(x=4, y=0), Point2D(x=4, y=4), Point2D(x=0, y=4)],
         height=3,
+        floorZone=WALL_ZONE,
+        wallZone=WALL_ZONE,
         grid=GridInput(
             x=AxisGrid(spacing=2, offsetBeginning=1, offsetEnding=1),
             y=AxisGrid(spacing=2, offsetBeginning=1, offsetEnding=1),
@@ -19,16 +26,42 @@ def _payload() -> CalculateRequest:
     )
 
 
+def test_luminaire_rotation_reaches_fixtures():
+    payload = _payload()
+    payload.luminaireRotation = 90.0
+    result = calculate(payload, SAMPLE_IES)
+    assert all(f.rotation == 90.0 for f in result.fixtures)
+
+
 def test_pipeline_floor_lux_and_maintenance_metadata():
     result = calculate(_payload(), SAMPLE_IES)
     assert result.fixtures
+    fixture = result.fixtures[0]
+    assert len(fixture.corners) == 4
+    assert len(fixture.elements) == 1
+    assert fixture.length == 0
+    assert fixture.width == 0
+    assert fixture.height == 0
     assert result.floorPatches
     assert all(p.center.z == WORK_PLANE_HEIGHT for p in result.floorPatches)
+    xs = [p.center.x for p in result.floorPatches]
+    ys = [p.center.y for p in result.floorPatches]
+    span = 4.0 - 2 * WALL_ZONE
+    spacing = en12464_spacing(span)
+    n = max(1, math.ceil(span / spacing - EPS))
+    half = span / n / 2
+    assert min(xs) == pytest.approx(WALL_ZONE + half)
+    assert max(xs) == pytest.approx(4 - WALL_ZONE - half)
+    assert min(ys) == pytest.approx(WALL_ZONE + half)
+    assert max(ys) == pytest.approx(4 - WALL_ZONE - half)
+    assert result.directFloorMatrices[fixture.id].metadata["patchSize"] == pytest.approx(result.floorPatches[0].size)
     total = result.totalFloorIlluminance.values
     assert total
     assert max(total) > 0
     assert result.totalFloorIlluminance.metadata["maintained"] is True
     assert result.totalFloorIlluminance.metadata["maintenanceFactor"] == MAINTENANCE_FACTOR
+    assert result.evaluation.count == len(result.floorPatches)
+    assert result.evaluation.wallZone == WALL_ZONE
     assert set(result.directFloorMatrices) == set(result.directWallMatrices[next(iter(result.wallPatches))])
     combined = [0.0] * len(total)
     for matrix in result.directFloorMatrices.values():
