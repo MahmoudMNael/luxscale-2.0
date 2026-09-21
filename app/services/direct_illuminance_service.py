@@ -80,9 +80,6 @@ def compute_direct_matrix(
     room_polygon: list[Vec2] | object | None = None,
     c0_offset_deg: float = 0.0,
 ) -> Matrix:
-    from shapely.geometry import LineString
-    from shapely.prepared import prep
-
     metadata: dict = {
         "kind": "direct",
         "surfaceType": surface_type,
@@ -91,9 +88,23 @@ def compute_direct_matrix(
     }
     if wall_id is not None:
         metadata["wallId"] = wall_id
-    vis_room = _visibility_for_direct(room_polygon)
     if room_polygon is not None:
         metadata["occlusion"] = "room-polygon"
+    # C++ fast path (OpenMP over patches, GIL released, identical physics).
+    if isinstance(room_polygon, list) or room_polygon is None:
+        try:
+            from app.services._luxcore_bridge import LuxCoreDirectEngine
+
+            values = LuxCoreDirectEngine().compute_values(
+                fixture, patches, c0_offset_deg=c0_offset_deg, room_polygon=room_polygon,
+            )
+            return Matrix(values, metadata)
+        except Exception:
+            pass
+    from shapely.geometry import LineString
+    from shapely.prepared import prep
+
+    vis_room = _visibility_for_direct(room_polygon)
     prepared = prep(vis_room) if vis_room is not None else None
     _, elements = luminous_opening(fixture)
     n = len(elements)

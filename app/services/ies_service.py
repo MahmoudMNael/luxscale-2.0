@@ -56,6 +56,7 @@ def load_ies(ies_text: str) -> IESProfile:
     flux_scale = 1.0
     if lumens > 0 and flux > EPS:
         flux_scale = (lamps * lumens) / flux
+    print(f"IES flux: {flux:.2f} lm, lamps: {lamps}, lumens: {lumens:.2f} lm, multiplier: {multiplier:.2f}")
     return IESProfile(
         vertical,
         horizontal,
@@ -71,6 +72,13 @@ def load_ies(ies_text: str) -> IESProfile:
 
 
 def get_candela(profile: IESProfile, theta_vertical_deg: float, phi_horizontal_deg: float) -> float:
+    # C++ fast path (bilinear sample, identical math). Falls back on any issue.
+    try:
+        from app.services._luxcore_bridge import LuxCorePhotometry
+
+        return LuxCorePhotometry.candela(profile, theta_vertical_deg, phi_horizontal_deg)
+    except Exception:
+        pass
     if theta_vertical_deg > profile.vertical_angles[-1] + EPS:
         return 0.0
     iv0, iv1, tv = _bracket(profile.vertical_angles, theta_vertical_deg)

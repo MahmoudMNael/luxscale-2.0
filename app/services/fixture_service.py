@@ -45,6 +45,27 @@ def generate_fixture_grid(
 
 
 def luminous_opening(fixture: Fixture) -> tuple[list[Vec3], list[Vec3]]:
+    # C++ fast path (identical rectangle subdivision). Falls back on any issue.
+    try:
+        from app.services._luxcore_bridge import LuxCoreRuntime
+
+        _mod = LuxCoreRuntime().module
+        if _mod is not None:
+            pos = [float(fixture.position[0]), float(fixture.position[1]), float(fixture.position[2])]
+            corners = _mod.luminous_corners(
+                pos, float(fixture.rotation),
+                float(fixture.ies_profile.length), float(fixture.ies_profile.width),
+            )
+            elements = _mod.luminous_elements(
+                pos, float(fixture.rotation),
+                float(fixture.ies_profile.length), float(fixture.ies_profile.width),
+            )
+            return (
+                [(float(c[0]), float(c[1]), float(c[2])) for c in corners.tolist()],
+                [(float(e[0]), float(e[1]), float(e[2])) for e in elements.tolist()],
+            )
+    except Exception:
+        pass
     # ponytail: rectangle in the aim-perpendicular plane only; 5-face box if a tall opening emits at 90°.
     cx, cy, cz = fixture.position
     length, width = fixture.ies_profile.length, fixture.ies_profile.width

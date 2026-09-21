@@ -150,3 +150,9 @@ class CalculateResponse(BaseModel):
     )
     ceilingHeight: float = Field(..., description="Applied ceiling plane height in meters")
     mountingHeight: float = Field(..., description="Applied fixture mounting height in meters")
+    solverCell: float = Field(
+        default=0.3, description="Effective radiosity solver cell in meters (0.3 unless the room needed more than MAX_SOLVER_PATCHES sources and was adaptively coarsened)"
+    )
+    solverDegraded: bool = Field(
+        default=False, description="True when the solver mesh was coarsened beyond SOLVER_CELL to respect MAX_SOLVER_PATCHES (large rooms only)"
+    )

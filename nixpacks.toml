@@ -1,0 +1,5 @@
+# Railway builds with Nixpacks. The luxcore C++ extension compiles at
+# `pip install` time (scikit-build-core backend), so the builder needs cmake
+# alongside the Python toolchain. Python headers ship with nixpkgs python.
+[phases.setup]
+nixPkgs = ["python3", "cmake", "gcc"]
