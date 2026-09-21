@@ -281,6 +281,16 @@ def compute_bounce_values(
     reflectance: float,
     room_polygon: list[Vec2] | None = None,
 ) -> list[float]:
+    # C++ fast path (OpenMP over targets). Falls back on any issue.
+    if room_polygon is None or isinstance(room_polygon, list):
+        try:
+            from app.services._luxcore_bridge import LuxCoreRadiositySolver
+
+            return LuxCoreRadiositySolver().bounce_values(
+                source_patches, source_values, target_patches, reflectance, room_polygon
+            )
+        except Exception:
+            pass
     if len(source_values) != len(source_patches):
         raise GeometryError("Cannot sum matrices with different patch layouts.")
     if not target_patches or not source_patches:
@@ -370,6 +380,19 @@ def compute_indirect_per_target_per_origin(
     floor_reflectance: float = 0.0,
     ceiling_reflectance: float = 0.0,
 ) -> dict[str, dict[str, list[float]]]:
+    # C++ fast path (F/G builders + Neumann series in OpenMP, GIL released).
+    if room_polygon is None or isinstance(room_polygon, list):
+        try:
+            from app.services._luxcore_bridge import LuxCoreRadiositySolver
+
+            return LuxCoreRadiositySolver().solve(
+                all_source_patches, origin_seeds, targets,
+                wall_reflectance=wall_reflectance, num_bounces=num_bounces,
+                room_polygon=room_polygon, floor_reflectance=floor_reflectance,
+                ceiling_reflectance=ceiling_reflectance,
+            )
+        except Exception:
+            pass
     interact = sorted(origin_seeds)
     n_src = len(all_source_patches)
     for values in origin_seeds.values():

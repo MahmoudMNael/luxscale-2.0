@@ -114,6 +114,75 @@ def resolve_wall_border(length: float, height: float, override: float | None) ->
     return perimeter_border(min(length, height))
 
 
+def estimate_solver_patches(
+    polygon: list[Vec2], walls: list[Wall], cell: float
+) -> int:
+    """Upper-bound solver source count for ``cell`` without building any mesh.
+
+    Mirrors the counting of ``generate_solver_plan_grid`` (``ceil(W/cell)`` x
+    ``ceil(H/cell)`` over the room bbox, counted twice for floor+ceiling) and
+    ``generate_solver_wall_grid`` (exact: ``ceil(L/cell)`` x ``ceil(H/cell)``
+    per wall). The plan part is an upper bound for concave rooms (not every
+    bbox centre survives polygon clipping); exact for convex ones.
+    """
+    if cell <= EPS or len(polygon) < 3:
+        return 0
+    xs = [p[0] for p in polygon]
+    ys = [p[1] for p in polygon]
+    width, height = max(xs) - min(xs), max(ys) - min(ys)
+    if width <= EPS or height <= EPS:
+        return 0
+    nx = max(1, math.ceil(width / cell - EPS))
+    ny = max(1, math.ceil(height / cell - EPS))
+    total = 2 * nx * ny
+    for wall in walls:
+        if wall.length <= EPS or wall.height <= EPS:
+            continue
+        total += max(1, math.ceil(wall.length / cell - EPS)) * max(
+            1, math.ceil(wall.height / cell - EPS)
+        )
+    return total
+
+
+def resolve_solver_cell(
+    polygon: list[Vec2],
+    walls: list[Wall],
+    *,
+    base_cell: float | None = None,
+    cap: int | None = None,
+) -> tuple[float, int, bool]:
+    """Adaptive radiosity solver cell keeping sources under ``cap``.
+
+    Rooms fitting ``cap`` patches at ``base_cell`` (a 10x10 m room at 0.3 m
+    needs ~3,700 of the default 6,000 cap) keep full resolution and return
+    ``(base_cell, estimate, False)``. Larger rooms coarsen as
+    ``cell = base*sqrt(estimate/cap)`` (patches scale as 1/cell^2), iterated
+    to absorb ``ceil`` rounding, returning ``degraded=True``. Pure integer
+    math here: no mesh is allocated, so this can never blow up memory.
+    """
+    from app.app_settings import MAX_SOLVER_PATCHES, SOLVER_CELL
+
+    if base_cell is None:
+        base_cell = SOLVER_CELL
+    if cap is None:
+        cap = MAX_SOLVER_PATCHES
+    cell = base_cell
+    estimate = estimate_solver_patches(polygon, walls, cell)
+    if estimate > cap and cell > EPS:
+        # Patches ~ 1/cell^2 -> one jump lands near cap, then ratchet
+        # x1.1 to absorb ceil rounding (bounded: estimate is monotone
+        # non-increasing in cell and bottoms out at the all-ones mesh).
+        cell = cell * math.sqrt(estimate / cap)
+        estimate = estimate_solver_patches(polygon, walls, cell)
+        for _ in range(20):
+            if estimate <= cap:
+                break
+            cell *= 1.1
+            estimate = estimate_solver_patches(polygon, walls, cell)
+    degraded = cell > base_cell + EPS
+    return cell, estimate, degraded
+
+
 def _empty_meta() -> dict[str, float]:
     return {"spacing": 0.0, "spacingX": 0.0, "spacingY": 0.0, "nx": 0, "ny": 0, "dx": 0.0, "dy": 0.0,
             "xmin": 0.0, "xmax": 0.0, "ymin": 0.0, "ymax": 0.0, "border": 0.0}
@@ -539,6 +608,13 @@ def apply_interp_weights(
     weights: tuple[list[int], list[int], list[float], int, int],
 ) -> list[float]:
     """Apply CSR interpolation weights to a solver-mesh value vector."""
+    # C++ fast path (trivially parallel gather). Falls back on any issue.
+    try:
+        from app.services._luxcore_bridge import LuxCoreGeometry
+
+        return LuxCoreGeometry().apply_weights(list(values), weights)
+    except Exception:
+        pass
     indptr, indices, data, n_eval, _ = weights
     if n_eval == 0:
         return []

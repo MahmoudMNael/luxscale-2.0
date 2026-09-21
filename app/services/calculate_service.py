@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import time
 
-from app.app_settings import C0_ORIENTATION_OFFSET_DEG, CEILING_REFLECTANCE_FACTOR, FLOOR_REFLECTANCE_FACTOR, MAINTENANCE_FACTOR, NUM_BOUNCES, PATCH_SIZE, SOLVER_CELL, WALL_REFLECTANCE_FACTOR, WORK_PLANE_HEIGHT
+from app.app_settings import C0_ORIENTATION_OFFSET_DEG, CEILING_REFLECTANCE_FACTOR, FLOOR_REFLECTANCE_FACTOR, MAINTENANCE_FACTOR, NUM_BOUNCES, PATCH_SIZE, WALL_REFLECTANCE_FACTOR, WORK_PLANE_HEIGHT
 from app.domain.exceptions import GeometryError
 from app.domain.models import Fixture, Matrix, Patch, Vec3, WallSurface
 from app.schemas.calculate import CalculateRequest, CalculateResponse, EvaluationDto, FixtureDto
@@ -11,7 +11,7 @@ from app.schemas.geometry import PatchDto, Vec3Dto
 from app.schemas.matrix import MatrixDto
 from app.services.direct_illuminance_service import compute_direct_matrix
 from app.services.fixture_service import generate_fixture_grid, luminous_opening
-from app.services.geometry_service import apply_interp_weights, build_plan_interp_weights, build_wall_interp_weights, define_room, generate_ceiling_evaluation_grid, generate_floor_evaluation_grid, generate_solver_plan_grid, generate_solver_wall_grid, generate_wall_evaluation_grid, resolve_horizontal_border, resolve_wall_border
+from app.services.geometry_service import apply_interp_weights, build_plan_interp_weights, build_wall_interp_weights, define_room, generate_ceiling_evaluation_grid, generate_floor_evaluation_grid, generate_solver_plan_grid, generate_solver_wall_grid, generate_wall_evaluation_grid, resolve_horizontal_border, resolve_solver_cell, resolve_wall_border
 from app.services.ies_service import load_ies
 from app.services.indirect_illuminance_service import compute_indirect_per_target_per_origin
 from app.services.matrix_service import apply_maintenance_factor, sum_matrices
@@ -61,16 +61,27 @@ def calculate(payload: CalculateRequest, ies_text: str) -> CalculateResponse:
     # Relux-like independent solver mesh: fixed raster, full coverage, every
     # wall reflects (no 1 m neglect on the solver; neglect applies to eval
     # reporting only). Physics runs here; eval grids sample via interpolation.
+    # The cell is adaptive: rooms needing more than MAX_SOLVER_PATCHES sources
+    # at 0.3 m (dense F matrix = n^2 x 8 bytes) transparently coarsen so the
+    # solver can never blow up memory (e.g. a 100x60 m hall); rooms at or
+    # below the cap keep exact 0.3 m resolution.
+    solver_cell, solver_estimate, solver_degraded = resolve_solver_cell(room.polygon, room.walls)
+    _log.info(
+        "solver cell=%.3f estimate=%s degraded=%s",
+        solver_cell,
+        solver_estimate,
+        solver_degraded,
+    )
     floor_full, floor_full_meta = generate_solver_plan_grid(
-        room.polygon, work_z, "floor", "floor", SOLVER_CELL, normal=(0.0, 0.0, 1.0))
+        room.polygon, work_z, "floor", "floor", solver_cell, normal=(0.0, 0.0, 1.0))
     ceiling_full, ceiling_full_meta = generate_solver_plan_grid(
-        room.polygon, ceiling_h, "ceiling", "ceiling", SOLVER_CELL, normal=(0.0, 0.0, -1.0))
+        room.polygon, ceiling_h, "ceiling", "ceiling", solver_cell, normal=(0.0, 0.0, -1.0))
     if not floor_full:
         raise GeometryError("No solver patches remain after clipping to the polygon.")
     wall_full: dict[str, list[Patch]] = {}
     wall_full_metas: dict[str, dict[str, float]] = {}
     for wall in room.walls:
-        patches, meta = generate_solver_wall_grid(wall, SOLVER_CELL)
+        patches, meta = generate_solver_wall_grid(wall, solver_cell)
         wall_full[wall.id] = patches
         wall_full_metas[wall.id] = meta
     _log.info(
@@ -299,14 +310,18 @@ def calculate(payload: CalculateRequest, ies_text: str) -> CalculateResponse:
         ceilingReflectance=CEILING_REFLECTANCE_FACTOR,
         ceilingHeight=ceiling_h,
         mountingHeight=mount_h,
+        solverCell=solver_cell,
+        solverDegraded=solver_degraded,
     )
     _log.info(
-        "success duration_ms=%.1f bounces=%s wall_reflectance=%s floor_reflectance=%s ceiling_reflectance=%s",
+        "success duration_ms=%.1f bounces=%s wall_reflectance=%s floor_reflectance=%s ceiling_reflectance=%s solver_cell=%.3f degraded=%s",
         (time.perf_counter() - started) * 1000,
         applied_bounces,
         WALL_REFLECTANCE_FACTOR,
         FLOOR_REFLECTANCE_FACTOR,
         CEILING_REFLECTANCE_FACTOR,
+        solver_cell,
+        solver_degraded,
     )
     return response
 

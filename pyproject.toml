@@ -14,6 +14,9 @@ dependencies = [
 dev = [
     "pytest>=8.0.0",
     "httpx>=0.27.0",
+    "nanobind>=2",
+    "scikit-build-core>=0.10",
+    "cmake>=3.28",
 ]
 
 [tool.pytest.ini_options]
@@ -21,8 +24,12 @@ pythonpath = ["."]
 testpaths = ["tests"]
 
 [build-system]
-requires = ["setuptools>=69"]
-build-backend = "setuptools.build_meta"
+requires = ["scikit-build-core>=0.10", "nanobind>=2"]
+build-backend = "scikit_build_core.build"
 
-[tool.setuptools.packages.find]
-include = ["app*"]
+[tool.scikit-build]
+cmake.build-type = "Release"
+wheel.packages = ["app"]
+
+[tool.scikit-build.cmake.define]
+CMAKE_CXX_STANDARD = "17"
