@@ -3,11 +3,51 @@ from __future__ import annotations
 import math
 
 from app.domain.exceptions import NoFixturesError
-from app.domain.models import Fixture, IESProfile, Room, Vec3
+from app.domain.models import Fixture, FixturePlacement, IESProfile, Room, Vec3
 from app.schemas.grid import GridInput
 from app.services.vector_math import EPS, normalize, point_in_polygon
 
+import logging
+
+_log = logging.getLogger(__name__)
+
 _ELEMENT = 0.2
+
+
+def build_fixtures(
+    polygon: list[tuple[float, float]],
+    placements: list[FixturePlacement],
+    profiles: dict[str, IESProfile],
+    mounting_default: float,
+    default_ref: str | None = None,
+) -> list[Fixture]:
+    """Free placements -> domain fixtures. No grid involved.
+
+    Skips placements outside the polygon (warns); raises NoFixturesError
+    only when nothing remains. Per-fixture z/rotation/aim/photometry win
+    over the shared defaults.
+    """
+    fixtures: list[Fixture] = []
+    for placement in placements:
+        if not point_in_polygon((placement.x, placement.y), polygon):
+            _log.warning("fixture %s outside room polygon, skipped", placement.id)
+            continue
+        profile = profiles.get(placement.ies_ref or default_ref or "")
+        if profile is None:  # caller validates refs; guard for direct use
+            raise NoFixturesError(f"Fixture '{placement.id}' has no photometry profile.")
+        z = placement.z if placement.z is not None else mounting_default - profile.height / 2.0
+        fixtures.append(
+            Fixture(
+                id=placement.id,
+                position=(placement.x, placement.y, z),
+                aim_direction=normalize(placement.aim_direction),
+                rotation=placement.rotation,
+                ies_profile=profile,
+            )
+        )
+    if not fixtures:
+        raise NoFixturesError("No fixtures fall inside the room polygon for the given grid.")
+    return fixtures
 
 
 def generate_fixture_grid(
@@ -23,25 +63,21 @@ def generate_fixture_grid(
     ys = [p[1] for p in room.polygon]
     xmin, xmax, ymin, ymax = min(xs), max(xs), min(ys), max(ys)
     aim = normalize(aim_direction)
-    fixtures: list[Fixture] = []
+    placements: list[FixturePlacement] = []
     n = 1
-    for y in _axis(ymin, ymax, grid.y.spacing, grid.y.offset_beginning, grid.y.offset_ending):
-        for x in _axis(xmin, xmax, grid.x.spacing, grid.x.offset_beginning, grid.x.offset_ending):
+    for y in axis_positions(ymin, ymax, grid.y.spacing, grid.y.offset_beginning, grid.y.offset_ending):
+        for x in axis_positions(xmin, xmax, grid.x.spacing, grid.x.offset_beginning, grid.x.offset_ending):
             if not point_in_polygon((x, y), room.polygon):
                 continue
-            fixtures.append(
-                Fixture(
-                    id=f"F{n}",
-                    position=(x, y, mounting_height - ies_profile.height / 2.0),
-                    aim_direction=aim,
-                    rotation=rotation,
-                    ies_profile=ies_profile,
-                )
+            placements.append(
+                FixturePlacement(id=f"F{n}", x=x, y=y, rotation=rotation, aim_direction=aim)
             )
             n += 1
-    if not fixtures:
+    if not placements:
         raise NoFixturesError("No fixtures fall inside the room polygon for the given grid.")
-    return fixtures
+    return build_fixtures(
+        room.polygon, placements, {"default": ies_profile}, mounting_height, "default"
+    )
 
 
 def luminous_opening(fixture: Fixture) -> tuple[list[Vec3], list[Vec3]]:
@@ -94,7 +130,7 @@ def luminous_opening(fixture: Fixture) -> tuple[list[Vec3], list[Vec3]]:
     return corners, elements
 
 
-def _axis(lo: float, hi: float, spacing: float, offset_beginning: float, offset_ending: float) -> list[float]:
+def axis_positions(lo: float, hi: float, spacing: float, offset_beginning: float, offset_ending: float) -> list[float]:
     start = lo + offset_beginning
     stop = hi - offset_ending
     points: list[float] = []

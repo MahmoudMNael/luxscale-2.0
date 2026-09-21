@@ -9,7 +9,8 @@ from fastapi.openapi.utils import get_openapi
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.controllers.calculate_controller import router
+from app.controllers.calculate_controller import router as calculate_router
+from app.controllers.optimize_controller import router as optimize_router
 from app.domain.exceptions import AppError
 from app.exception_handlers import (
     app_error_handler,
@@ -20,6 +21,7 @@ from app.exception_handlers import (
 from app.logging_config import configure_logging
 from app.middleware.request_context import RequestContextMiddleware
 from app.schemas.calculate import CalculateRequest
+from app.schemas.optimize import OptimizeRequest
 
 configure_logging()
 
@@ -34,7 +36,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.add_middleware(RequestContextMiddleware)
-app.include_router(router)
+app.include_router(calculate_router)
+app.include_router(optimize_router)
 app.add_exception_handler(AppError, app_error_handler)
 app.add_exception_handler(UnicodeDecodeError, utf8_error_handler)
 app.add_exception_handler(RequestValidationError, validation_handler)
@@ -55,6 +58,10 @@ def _openapi() -> dict:
     components = schema.setdefault("components", {}).setdefault("schemas", {})
     components.update(defs)
     components["CalculateRequest"] = js
+    ojs = OptimizeRequest.model_json_schema(ref_template="#/components/schemas/{model}")
+    odefs = ojs.pop("$defs", {})
+    components.update(odefs)
+    components["OptimizeRequest"] = ojs
     schema["paths"]["/calculate"]["post"]["requestBody"] = {
         "required": True,
         "content": {
@@ -67,7 +74,32 @@ def _openapi() -> dict:
                         "iesFile": {
                             "type": "string",
                             "format": "binary",
-                            "description": "IES LM-63 photometry text file",
+                            "description": "Default IES LM-63 photometry text file",
+                        },
+                        "iesFiles": {
+                            "type": "array",
+                            "items": {"type": "string", "format": "binary"},
+                            "description": "Extra IES files keyed by filename for per-fixture iesRef",
+                        },
+                    },
+                },
+                "encoding": {"payload": {"contentType": "application/json"}},
+            }
+        },
+    }
+    schema["paths"]["/optimize"]["post"]["requestBody"] = {
+        "required": True,
+        "content": {
+            "multipart/form-data": {
+                "schema": {
+                    "type": "object",
+                    "required": ["payload"],
+                    "properties": {
+                        "payload": {"$ref": "#/components/schemas/OptimizeRequest"},
+                        "iesFiles": {
+                            "type": "array",
+                            "items": {"type": "string", "format": "binary"},
+                            "description": "IES files; filename = fixture id",
                         },
                     },
                 },

@@ -34,3 +34,8 @@ class IesParseError(AppError):
 class NoFixturesError(AppError):
     def __init__(self, message: str, *, details: list[dict[str, Any]] | None = None) -> None:
         super().__init__(message, code="NO_FIXTURES", status_code=400, details=details)
+
+
+class ProviderError(AppError):
+    def __init__(self, message: str, *, details: list[dict[str, Any]] | None = None) -> None:
+        super().__init__(message, code="PROVIDER_ERROR", status_code=502, details=details)

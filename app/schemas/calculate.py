@@ -38,6 +38,24 @@ class FixtureDto(BaseModel):
     elements: list[Vec3Dto] = Field(..., min_length=1, description="Sample points used in the direct I/N sum")
 
 
+class FixturePlacementDto(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, serialize_by_alias=True)
+
+    id: str | None = Field(default=None, description="Fixture id; defaults to F1, F2, ...")
+    x: float = Field(..., description="Plan X, meters")
+    y: float = Field(..., description="Plan Y, meters")
+    z: float | None = Field(
+        default=None, gt=0, description="Mounting height of this fixture; defaults to mountingHeight"
+    )
+    rotation: float | None = Field(
+        default=None, ge=0, le=360, description="In-room rotation; defaults to luminaireRotation"
+    )
+    aimDirection: Vec3Dto | None = Field(default=None, description="Aim; defaults to straight down")
+    iesRef: str | None = Field(
+        default=None, description="Photometry key: uploaded IES filename or provider fixture id"
+    )
+
+
 class CalculateRequest(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -76,7 +94,12 @@ class CalculateRequest(BaseModel):
         gt=0,
         description="Fixture mounting height in meters (e.g. pendant drop below ceiling). Defaults to ceilingHeight.",
     )
-    grid: GridInput
+    grid: GridInput | None = Field(
+        default=None, description="Regular luminaire grid (legacy). Exactly one of grid/fixtures."
+    )
+    fixtures: list[FixturePlacementDto] | None = Field(
+        default=None, min_length=1, description="Free fixture positions. Exactly one of grid/fixtures."
+    )
     workPlaneHeight: float = Field(
         default=0.0,
         ge=0,
@@ -107,6 +130,8 @@ class CalculateRequest(BaseModel):
             and self.mountingHeight > self.ceilingHeight
         ):
             raise ValueError("mountingHeight cannot exceed ceilingHeight")
+        if (self.grid is None) == (self.fixtures is None):
+            raise ValueError("Exactly one of 'grid' or 'fixtures' must be given.")
         return self
 
 
