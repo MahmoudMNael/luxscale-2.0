@@ -9,3 +9,4 @@ build/
 .coverage
 # In-place C++ extension build (rebuilt via scripts/build_luxcore.py).
 luxcore*.so
+.env

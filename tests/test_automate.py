@@ -1,24 +1,25 @@
-"""Optimizer check: compliance, catalog comparison, providers, validation."""
-
-import json
+"""Automate check: compliance, catalog comparison, providers, validation."""
 
 import pytest
 
-from app.main import app
-from app.optimize import frange, is_compliant, pick_diverse
-from app.optimize.lumen import passes_lumen_gate, required_flux, room_uf
-from app.optimize.search import Solution
-from app.optimize.layouts import LayoutSpec
-from app.controllers.optimize_controller import _fixture_provider, _standard_provider
+from app.automate import automate as run_search
+from app.automate import frange, is_compliant, pick_diverse
+from app.automate.layouts import LayoutSpec
+from app.automate.lumen import passes_lumen_gate, required_flux, room_uf
+from app.automate.search import Solution
+from app.controllers.automate_controller import _fixture_provider, _standard_provider
 from app.engine import RoomInput
-from app.optimize import optimize as run_search
+from app.main import app
 from app.providers import (
     FixtureSpec,
     InMemoryFixtureProvider,
     InMemoryStandardProvider,
     StandardTarget,
 )
+from app.schemas.automate import application_for_mounting_height
+from app.schemas.standards import StandardResponse
 from app.services.ies_service import installed_flux, load_ies
+from app.services.variant_photometrics import variant_lumens, variant_wattage
 from fastapi.testclient import TestClient
 from tests.ies_sample import SAMPLE_IES, ies_with
 
@@ -93,13 +94,74 @@ def test_pick_diverse_caps_and_leads_compact():
     assert len(picks) == 2 and picks[0].count == 2
 
 
+def test_application_derivation_threshold():
+    assert application_for_mounting_height(2.9) == "interior"
+    assert application_for_mounting_height(3.0) == "industrial"
+    assert application_for_mounting_height(5.0) == "industrial"
+
+
+def test_standard_response_target_mapping():
+    payload = {
+        "id": "en12464_1_v2019_6_1_1",
+        "qdrant_point_id": "abc",
+        "standard_metadata": {
+            "standard_code": "EN12464-1", "version_year": "2019", "is_latest": True,
+        },
+        "hierarchy": {
+            "category_table_number": "6.1", "category_title": "Offices",
+            "ref_number": "6.1.1", "page": 1,
+        },
+        "activity": "Writing, typing, reading",
+        "parameters": {"em_r_lx": 500.0, "uo": 0.6},
+        "specific_requirements": None,
+        "searchable_text": "office writing",
+        "content_hash": "hash",
+        "created_at": "2026-09-22T10:00:00Z",
+        "updated_at": "2026-09-22T10:00:00Z",
+    }
+    standard = StandardResponse.model_validate(payload)
+    assert standard.target_illuminance() == 500.0
+    assert standard.target_uniformity() == 0.6
+
+
+def test_variant_photometrics_uses_power_times_efficacy():
+    from app.schemas.fixtures import VariantResponse
+
+    variant = VariantResponse.model_validate(
+        {
+            "id": "11111111-1111-4111-8111-111111111111",
+            "fixture_id": "22222222-2222-4222-8222-222222222222",
+            "name": "V1", "chip": "C", "driver": "D",
+            "power": 20, "efficacy": 150,
+            "power_factor": "0.95", "cri": "80",
+            "mechanical_protections": [], "electrical_protections": [],
+            "dimension_length": None, "dimension_width": None,
+            "dimension_depth": None, "dimension_radius": None,
+            "model_3d_file_id": None, "model_3d_file": None,
+            "ies_file_id": "33333333-3333-4333-8333-333333333333",
+            "ies_file": {
+                "id": "33333333-3333-4333-8333-333333333333",
+                "relative_path": "ies/a.ies", "original_filename": "a.ies",
+                "mime_type": "text/plain", "size_bytes": 10,
+                "created_at": "2026-09-22T10:00:00Z",
+            },
+            "images": [],
+            "created_at": "2026-09-22T10:00:00Z",
+            "updated_at": "2026-09-22T10:00:00Z",
+        }
+    )
+    assert variant_wattage(variant) == 20.0
+    assert variant_lumens(variant) == 3000.0  # 20W x 150 lm/W, not the IES flux
+
+
 def _payload(**over):
     base = {
         "polygon": [{"x": 0, "y": 0}, {"x": 4, "y": 0}, {"x": 4, "y": 4}, {"x": 0, "y": 4}],
-        "height": 3,
+        "ceilingHeight": 3.0,
+        "mountingHeight": 3.0,
         "floorZone": 0.25,
         "wallZone": 0.25,
-        "target": {"avgLux": 50, "uniformity": 0.5, "maxOverdesign": 0.3},
+        "activityId": "office",
         "search": {
             "spacingX": {"min": 2.0, "max": 3.0, "step": 0.5},
             "spacingY": {"min": 2.0, "max": 3.0, "step": 0.5},
@@ -112,61 +174,131 @@ def _payload(**over):
     return base | over
 
 
-def test_optimize_endpoint_with_uploads():
-    client = TestClient(app)
-    response = client.post(
-        "/optimize",
-        data={"payload": json.dumps(_payload())},
-        files=[
-            ("iesFiles", ("dim.ies", SAMPLE_IES, "text/plain")),
-            ("iesFiles", ("bright.ies", ies_with(lumens=3000.0), "text/plain")),
-        ],
+def _spec(variant_id: str, wattage: float, lumens: float, **over) -> FixtureSpec:
+    defaults = dict(
+        id=variant_id,
+        fixture_id="fix-1",
+        variant_id=variant_id,
+        ies_text=SAMPLE_IES,
+        wattage=wattage,
+        lumens=lumens,
+        efficacy=(lumens / wattage if wattage else 0.0),
+        power=wattage,
+        is_main_solution=True,
+        applications=("industrial",),
     )
-    assert response.status_code == 200, response.text
-    body = response.json()
-    assert body["evaluatedA"] > 0 and body["evaluatedB"] > 0
-    assert len(body["solutions"]) >= 1
-    for sol in body["solutions"]:
-        assert sol["average"] >= 50.0 and sol["uniformity"] >= 0.5
-        assert sol["average"] <= 65.0
-        assert sol["grid"]["spacingX"] > 0 and sol["placements"]
+    return FixtureSpec(**(defaults | over))
 
 
-def test_optimize_endpoint_with_providers():
-    app.dependency_overrides[_standard_provider] = lambda: InMemoryStandardProvider(
+def _office_provider() -> InMemoryStandardProvider:
+    return InMemoryStandardProvider(
         {"office": StandardTarget(activity_id="office", avg_lux=50, uniformity=0.5,
                                    max_overdesign=0.3)}
     )
+
+
+def test_automate_endpoint_with_explicit_variant_ids():
+    app.dependency_overrides[_standard_provider] = _office_provider
     app.dependency_overrides[_fixture_provider] = lambda: InMemoryFixtureProvider(
-        {"cat-dim": FixtureSpec(id="cat-dim", ies_text=SAMPLE_IES, wattage=20.0)}
+        {
+            "var-dim": _spec("var-dim", wattage=10.0, lumens=1000.0),
+            "var-bright": _spec("var-bright", wattage=20.0, lumens=3000.0),
+        }
     )
     try:
         client = TestClient(app)
-        payload = _payload(target=None, activityId="office", fixtureIds=["cat-dim"])
-        del payload["target"]
-        response = client.post("/optimize", data={"payload": json.dumps(payload)})
+        # mountingHeight 3.0 -> industrial; IES shape from SAMPLE_IES but rating
+        # from the variant (20W x 150 lm/W = 3000 lm, rescaled in controller).
+        response = client.post("/automate", json=_payload(variantIds=["var-bright"]))
         assert response.status_code == 200, response.text
         body = response.json()
+        assert body["target"]["avgLux"] == 50
         assert body["solutions"]
-        assert all(s["fixtureId"] == "cat-dim" for s in body["solutions"])
+        assert all(s["fixtureId"] == "var-bright" for s in body["solutions"])
         assert all(s["powerW"] == s["fixtureCount"] * 20.0 for s in body["solutions"])
     finally:
         app.dependency_overrides.clear()
 
 
-def test_optimize_validation():
-    client = TestClient(app)
-    bad = _payload(target={"avgLux": 50, "uniformity": 0.5}, activityId="office")
-    response = client.post(
-        "/optimize", data={"payload": json.dumps(bad)},
-        files=[("iesFiles", ("dim.ies", SAMPLE_IES, "text/plain"))],
+def test_automate_endpoint_auto_lists_main_variants_for_application():
+    app.dependency_overrides[_standard_provider] = _office_provider
+    app.dependency_overrides[_fixture_provider] = lambda: InMemoryFixtureProvider(
+        {
+            "var-dim": _spec("var-dim", wattage=10.0, lumens=1000.0),
+            "var-bright": _spec("var-bright", wattage=20.0, lumens=3000.0),
+            # Non-main variant must never enter the catalog (filtered).
+            "var-side": _spec(
+                "var-side", wattage=20.0, lumens=3000.0, is_main_solution=False,
+            ),
+            # Wrong-application variant must never enter the catalog either.
+            "var-interior": _spec(
+                "var-interior", wattage=10.0, lumens=1000.0,
+                applications=("interior",),
+            ),
+        }
     )
-    assert response.status_code == 422
-    huge = _payload()
-    huge["search"]["spacingX"] = {"min": 0.5, "max": 10.0, "step": 0.05}
-    huge["search"]["spacingY"] = {"min": 0.5, "max": 10.0, "step": 0.05}
-    response = client.post(
-        "/optimize", data={"payload": json.dumps(huge)},
-        files=[("iesFiles", ("dim.ies", SAMPLE_IES, "text/plain"))],
+    try:
+        client = TestClient(app)
+        # mountingHeight 3.0 -> industrial; no variantIds -> auto-list.
+        response = client.post("/automate", json=_payload())
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["solutions"]
+        assert {s["fixtureId"] for s in body["solutions"]} <= {"var-dim", "var-bright"}
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_provider_filters_by_application_and_main_flag():
+    provider = InMemoryFixtureProvider(
+        {
+            "var-main": _spec("var-main", wattage=20.0, lumens=3000.0,
+                              applications=("interior",)),
+            "var-side": _spec("var-side", wattage=20.0, lumens=3000.0,
+                              applications=("interior",), is_main_solution=False),
+        }
     )
-    assert response.status_code == 422
+    assert [s.id for s in provider.list_main_variants("interior")] == ["var-main"]
+    assert [s.id for s in provider.get_variants(["var-main"], "interior")] == ["var-main"]
+    with pytest.raises(Exception):
+        provider.get_variants(["var-side"], "interior")
+    with pytest.raises(Exception):
+        provider.get_variants(["var-main"], "industrial")
+
+
+def test_automate_endpoint_rejects_non_main_variant_ids():
+    app.dependency_overrides[_standard_provider] = _office_provider
+    app.dependency_overrides[_fixture_provider] = lambda: InMemoryFixtureProvider(
+        {"var-side": _spec("var-side", wattage=20.0, lumens=3000.0,
+                           is_main_solution=False)}
+    )
+    try:
+        client = TestClient(app)
+        response = client.post("/automate", json=_payload(variantIds=["var-side"]))
+        # Unknown as a main-solution industrial variant -> provider error (400/502).
+        assert response.status_code in (400, 502), response.text
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_automate_validation():
+    app.dependency_overrides[_standard_provider] = _office_provider
+    app.dependency_overrides[_fixture_provider] = lambda: InMemoryFixtureProvider(
+        {"var-dim": _spec("var-dim", wattage=10.0, lumens=1000.0)}
+    )
+    try:
+        client = TestClient(app)
+        # mountingHeight above ceilingHeight.
+        bad = _payload(mountingHeight=4.0, ceilingHeight=3.0, variantIds=["var-dim"])
+        assert client.post("/automate", json=bad).status_code == 422
+        # Missing activityId.
+        bad2 = _payload(variantIds=["var-dim"])
+        del bad2["activityId"]
+        assert client.post("/automate", json=bad2).status_code == 422
+        # Oversized search space.
+        huge = _payload(variantIds=["var-dim"])
+        huge["search"]["spacingX"] = {"min": 0.5, "max": 10.0, "step": 0.05}
+        huge["search"]["spacingY"] = {"min": 0.5, "max": 10.0, "step": 0.05}
+        assert client.post("/automate", json=huge).status_code == 422
+    finally:
+        app.dependency_overrides.clear()

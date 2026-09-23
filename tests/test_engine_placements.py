@@ -131,16 +131,28 @@ def test_providers_mocks_and_rest_errors():
         standards.get_target("nope")
 
     fixtures = InMemoryFixtureProvider(
-        {"f1": FixtureSpec(id="f1", ies_text=SAMPLE_IES, wattage=32)}
+        {
+            "f1": FixtureSpec(
+                id="f1", fixture_id="fix-1", variant_id="f1",
+                ies_text=SAMPLE_IES, wattage=32, lumens=3200.0,
+                applications=("interior",),
+            )
+        }
     )
     assert fixtures.get_many(["f1"])[0].wattage == 32
+    assert fixtures.list_main_variants("interior")[0].lumens == 3200.0
+    assert fixtures.get_variants(["f1"], "interior")[0].id == "f1"
+    with pytest.raises(ProviderError):
+        fixtures.get_variants(["f1"], "industrial")
 
     with pytest.raises(ProviderError):  # base URL not configured
         RestStandardProvider(base_url="").get_target("office")
     with pytest.raises(ProviderError):  # unreachable host maps to 502, not raw URLError
         RestStandardProvider(base_url="http://127.0.0.1:1", timeout_s=0.2).get_target("office")
     with pytest.raises(ProviderError):
-        RestFixtureProvider(base_url="http://127.0.0.1:1", timeout_s=0.2).get_one("f1")
+        RestFixtureProvider(base_url="http://127.0.0.1:1", timeout_s=0.2).list_main_variants(
+            "interior"
+        )
 
 
 def test_placements_endpoint_with_default_ies():

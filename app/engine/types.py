@@ -1,6 +1,6 @@
 """Engine input/output types. Framework-free: no FastAPI, no pydantic, no providers.
 
-Any module (`http`, `optimize`, scripts, tests) builds an EngineInput and calls
+Any module (`http`, `automate`, scripts, tests) builds an EngineInput and calls
 app.engine.calculate — the engine never imports its callers back.
 """
 
@@ -39,7 +39,7 @@ class PhysicsOptions:
     wall_reflectance: float = WALL_REFLECTANCE_FACTOR
     floor_reflectance: float = FLOOR_REFLECTANCE_FACTOR
     ceiling_reflectance: float = CEILING_REFLECTANCE_FACTOR
-    bounces: int = NUM_BOUNCES  # 0 = direct only (cheap prune pass for optimizers)
+    bounces: int = NUM_BOUNCES  # 0 = direct only (cheap prune pass for automate)
     maintenance_factor: float = MAINTENANCE_FACTOR
     c0_offset_deg: float = C0_ORIENTATION_OFFSET_DEG
     solver_cell: float = SOLVER_CELL
@@ -70,9 +70,9 @@ class EvalGrids:
 @dataclass(frozen=True)
 class SolverCache:
     """Fixture-independent solver mesh. Build once per room, reuse for every
-    candidate layout (optimizer path). ponytail: F/G transfer matrices are
+    candidate layout (automate path). ponytail: F/G transfer matrices are
     still rebuilt per run() call inside the radiosity solver; hoist them here
-    when profiling says the optimizer needs it."""
+    when profiling says the automate search needs it."""
 
     floor_full: list[Patch] = field(default_factory=list)
     floor_full_meta: dict[str, float] = field(default_factory=dict)

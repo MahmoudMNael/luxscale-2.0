@@ -21,8 +21,8 @@ from app.engine import (
     resolve_fixtures,
     run,
 )
-from app.optimize.layouts import LayoutSpec, enumerate_layouts, placements_for_layout
-from app.optimize.lumen import passes_lumen_gate, room_uf
+from app.automate.layouts import LayoutSpec, enumerate_layouts, placements_for_layout
+from app.automate.lumen import passes_lumen_gate, room_uf
 from app.providers import StandardTarget
 from app.services.ies_service import installed_flux
 from app.services.vector_math import polygon_area
@@ -69,7 +69,7 @@ def is_compliant(avg: float, u0: float, target: StandardTarget) -> bool:
     )
 
 
-def optimize(
+def automate(
     room_input: RoomInput,
     catalog: dict[str, IESProfile],
     target: StandardTarget,
@@ -190,7 +190,7 @@ def optimize(
     feasible = [s for s in verified if is_compliant(s.average, s.uniformity, target)]
     misses = [s for s in verified if not is_compliant(s.average, s.uniformity, target)]
     _log.info(
-        "optimize candidates=%s feasible_a=%s verified=%s feasible=%s",
+        "automate candidates=%s feasible_a=%s verified=%s feasible=%s",
         len(rows_a), len(feasible_a), len(verified), len(feasible),
     )
     return Outcome(

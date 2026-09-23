@@ -1,15 +1,45 @@
-"""External standard-activity provider. REST JSON, no auth (env: STANDARDS_BASE_URL)."""
+"""External standard provider — admin contract §3 (env: STANDARDS_BASE_URL).
+
+`activityId` in the automate request IS the standard-id path key:
+    GET {STANDARDS_BASE_URL}/api/v1/standards/{activityId}
+-> success envelope (§1.1) with `data: StandardResponse`.
+
+Target mapping (EDIT HERE if the source fields change):
+- avg_lux    <- StandardResponse.target_illuminance() (em_r_lx, fallback em_u_lx)
+- uniformity <- StandardResponse.target_uniformity()  (uo)
+- max_overdesign has no contract source -> MAX_OVERDESIGN_DEFAULT below.
+"""
 
 from __future__ import annotations
 
 import json
 import os
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from typing import Protocol
 
 from app.domain.exceptions import ProviderError
+from app.schemas.standards import StandardResponse
+
+API_PREFIX = "/api/v1"
+
+
+def api_base(base_url: str) -> str:
+    """Base URL + `/api/v1`, unless the base URL already ends with it.
+
+    `.env` values may be either `http://host:8001` or
+    `http://host:8001/api/v1` — both resolve to the same admin endpoints
+    instead of double-prefixing (`/api/v1/api/v1/...` -> 404).
+    """
+    base = base_url.rstrip("/")
+    if base.endswith(API_PREFIX):
+        return base
+    return base + API_PREFIX
+
+# No contract source for allowed overdesign -> single editable default.
+MAX_OVERDESIGN_DEFAULT = 0.3
 
 
 @dataclass(frozen=True)
@@ -17,7 +47,7 @@ class StandardTarget:
     activity_id: str
     avg_lux: float
     uniformity: float
-    max_overdesign: float = 0.3
+    max_overdesign: float = MAX_OVERDESIGN_DEFAULT
     work_plane_height: float | None = None
     wall_zone: float | None = None
 
@@ -26,7 +56,7 @@ class StandardProvider(Protocol):
     def get_target(self, activity_id: str) -> StandardTarget: ...
 
 
-def _get(url: str, timeout_s: float) -> dict:
+def _get_json(url: str, timeout_s: float) -> dict:
     try:
         with urllib.request.urlopen(url, timeout=timeout_s) as response:
             if response.status != 200:
@@ -36,6 +66,8 @@ def _get(url: str, timeout_s: float) -> dict:
             except ValueError as exc:
                 raise ProviderError(f"Standards API returned invalid JSON for {url}.") from exc
     except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            raise ProviderError(f"Standard '{url}' not found.") from exc
         raise ProviderError(f"Standards API returned HTTP {exc.code} for {url}.") from exc
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         raise ProviderError(f"Standards API unreachable ({url}): {exc}.") from exc
@@ -44,42 +76,42 @@ def _get(url: str, timeout_s: float) -> dict:
     return data
 
 
-def _target_from(activity_id: str, data: dict) -> StandardTarget:
+def target_from_standard(standard: StandardResponse) -> StandardTarget:
+    """StandardResponse -> StandardTarget. EDIT mapping here if needed."""
     try:
-        avg = float(data.get("avgLux", data.get("avg_lux")))
-        uni = float(data.get("uniformity", data.get("u0")))
-    except (TypeError, ValueError) as exc:
-        raise ProviderError(f"Standards API payload for '{activity_id}' lacks avgLux/uniformity.") from exc
-
-    def _opt(*keys: str) -> float | None:
-        for key in keys:
-            if data.get(key) is not None:
-                return float(data[key])
-        return None
-
+        avg = standard.target_illuminance()
+    except ValueError as exc:
+        raise ProviderError(str(exc)) from exc
+    try:
+        uni = standard.target_uniformity()
+    except ValueError as exc:
+        raise ProviderError(str(exc)) from exc
     return StandardTarget(
-        activity_id=activity_id,
-        avg_lux=avg,
-        uniformity=uni,
-        max_overdesign=float(data.get("maxOverdesign", data.get("max_overdesign", 0.3))),
-        work_plane_height=_opt("workPlaneHeight", "work_plane_height"),
-        wall_zone=_opt("wallZone", "wall_zone"),
+        activity_id=standard.id,
+        avg_lux=float(avg),
+        uniformity=float(uni),
+        max_overdesign=MAX_OVERDESIGN_DEFAULT,
     )
 
 
 class RestStandardProvider:
-    """GET {base}/activities/{id}. Pony: plain urllib, no new deps."""
+    """GET {base}/api/v1/standards/{standard_id}. Plain urllib, no new deps."""
 
     def __init__(self, base_url: str | None = None, timeout_s: float = 5.0) -> None:
         base = base_url if base_url is not None else os.environ.get("STANDARDS_BASE_URL", "")
-        self.base_url = base.rstrip("/")
+        self.base_url = api_base(base) if base.rstrip("/") else ""
         self.timeout_s = timeout_s
 
     def get_target(self, activity_id: str) -> StandardTarget:
         if not self.base_url:
             raise ProviderError("STANDARDS_BASE_URL is not configured.")
-        data = _get(f"{self.base_url}/activities/{activity_id}", self.timeout_s)
-        return _target_from(activity_id, data)
+        key = urllib.parse.quote(str(activity_id), safe="")
+        payload = _get_json(f"{self.base_url}/standards/{key}", self.timeout_s)
+        try:
+            standard = StandardResponse.model_validate(payload.get("data", payload))
+        except Exception as exc:
+            raise ProviderError(f"Standards API payload for '{activity_id}' is invalid: {exc}.") from exc
+        return target_from_standard(standard)
 
 
 class InMemoryStandardProvider:
@@ -98,4 +130,13 @@ class InMemoryStandardProvider:
             raise ProviderError(f"Unknown activity '{activity_id}'.") from exc
 
 
-__all__ = ["StandardTarget", "StandardProvider", "RestStandardProvider", "InMemoryStandardProvider"]
+__all__ = [
+    "API_PREFIX",
+    "MAX_OVERDESIGN_DEFAULT",
+    "RestStandardProvider",
+    "StandardProvider",
+    "StandardTarget",
+    "InMemoryStandardProvider",
+    "api_base",
+    "target_from_standard",
+]
