@@ -1,0 +1,625 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>Automate endpoint tester</title>
+		<style>
+			:root {
+				color-scheme: light dark;
+			}
+			* {
+				box-sizing: border-box;
+			}
+			body {
+				font-family:
+					system-ui,
+					-apple-system,
+					'Segoe UI',
+					sans-serif;
+				margin: 0;
+				padding: 16px;
+				max-width: 1100px;
+			}
+			h1 {
+				font-size: 20px;
+				margin: 0 0 12px;
+			}
+			h2 {
+				font-size: 15px;
+				margin: 18px 0 8px;
+				border-bottom: 1px solid #8884;
+				padding-bottom: 4px;
+			}
+			.grid {
+				display: grid;
+				grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+				gap: 8px;
+			}
+			label {
+				display: flex;
+				flex-direction: column;
+				font-size: 12px;
+				gap: 4px;
+			}
+			input,
+			textarea,
+			select,
+			button {
+				font: inherit;
+				padding: 6px 8px;
+			}
+			textarea {
+				width: 100%;
+				min-height: 56px;
+				font-family: ui-monospace, monospace;
+				font-size: 12px;
+			}
+			button {
+				cursor: pointer;
+			}
+			.row {
+				display: flex;
+				gap: 8px;
+				flex-wrap: wrap;
+				align-items: center;
+			}
+			.badge {
+				display: inline-block;
+				padding: 2px 10px;
+				border-radius: 12px;
+				font-size: 12px;
+				font-weight: 600;
+				background: #ddd;
+			}
+			.badge.industrial {
+				background: #f2b544;
+				color: #222;
+			}
+			.badge.interior {
+				background: #6fbf73;
+				color: #103012;
+			}
+			#status {
+				margin: 12px 0;
+				font-size: 13px;
+				white-space: pre-wrap;
+			}
+			#status.ok {
+				color: green;
+			}
+			#status.err {
+				color: crimson;
+			}
+			.cards {
+				display: grid;
+				grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+				gap: 10px;
+				margin-top: 10px;
+			}
+			.card {
+				border: 1px solid #8886;
+				border-radius: 8px;
+				padding: 10px;
+				font-size: 13px;
+			}
+			.card.best {
+				border-color: #2a7;
+				border-width: 2px;
+			}
+			.card[data-sol] {
+				cursor: pointer;
+			}
+			.card[data-sol]:hover {
+				border-color: #e07b00;
+			}
+			.card.sel {
+				outline: 2px solid #e07b00;
+				outline-offset: 1px;
+			}
+			.card h3 {
+				margin: 0 0 6px;
+				font-size: 14px;
+			}
+			.card table {
+				border-collapse: collapse;
+				width: 100%;
+			}
+			.card td {
+				padding: 2px 4px;
+			}
+			.card td:last-child {
+				text-align: right;
+				font-variant-numeric: tabular-nums;
+			}
+			.picklist {
+				max-height: 180px;
+				overflow: auto;
+				border: 1px solid #8886;
+				border-radius: 6px;
+				margin-top: 6px;
+				font-size: 12px;
+			}
+			.picklist div {
+				padding: 5px 8px;
+				border-bottom: 1px solid #8883;
+				cursor: pointer;
+			}
+			.picklist div:hover {
+				background: #8882;
+			}
+			.mono {
+				font-family: ui-monospace, monospace;
+				font-size: 11px;
+				word-break: break-all;
+			}
+			canvas {
+				border: 1px solid #8886;
+				border-radius: 8px;
+				max-width: 100%;
+				background: #fff;
+			}
+			details {
+				margin-top: 8px;
+			}
+			summary {
+				cursor: pointer;
+				font-size: 13px;
+			}
+		</style>
+	</head>
+	<body>
+		<h1>Automate endpoint tester <span class="mono">POST /automate</span></h1>
+
+		<h2>Servers</h2>
+		<div class="grid">
+			<label>LuxScale base URL<input id="luxBase" value="http://127.0.0.1:8000" /></label>
+			<label>Admin base URL (for browsing)<input id="adminBase" value="http://localhost:8001/api/v1" /></label>
+		</div>
+
+		<h2>Room</h2>
+		<div class="grid">
+			<label>Width X (m)<input id="roomW" type="number" value="10" min="0.5" step="0.5" /></label>
+			<label>Length Y (m)<input id="roomL" type="number" value="8" min="0.5" step="0.5" /></label>
+			<label>Ceiling height (m, required)<input id="ceilingH" type="number" value="3.5" min="0.1" step="0.1" /></label>
+			<label>Mounting height (m, required)<input id="mountH" type="number" value="3.2" min="0.1" step="0.1" /></label>
+		</div>
+		<div class="row" style="margin-top: 8px">
+			<span>Application (mounting &le; 3.0 &rarr; interior, else industrial):</span>
+			<span id="appBadge" class="badge industrial">industrial</span>
+		</div>
+		<details>
+			<summary>Custom polygon (optional — overrides W &times; L rectangle)</summary>
+			<textarea id="polyJson" placeholder='[{"x":0,"y":0},{"x":8,"y":0},{"x":8,"y":6},{"x":0,"y":6}]'></textarea>
+		</details>
+
+		<h2>Standard</h2>
+		<div class="grid">
+			<label>activityId = standard id key (required)<input id="activityId" value="en12464_1_v2019_6_1_1" /></label>
+		</div>
+		<div class="row" style="margin-top: 8px">
+			<button id="btnStandards" type="button">Browse standards</button>
+			<span id="stdHint" class="mono"></span>
+		</div>
+		<div id="stdList" class="picklist" hidden></div>
+
+		<h2>Variants</h2>
+		<label
+			>variantIds, one UUID per line (empty = auto-list all main-solution variants for the application)
+			<textarea id="variantIds" placeholder="(empty = auto-list)"></textarea>
+		</label>
+		<div class="row" style="margin-top: 8px">
+			<button id="btnVariants" type="button">List main variants for this application</button>
+			<button id="btnClearVar" type="button">Clear (auto-list)</button>
+		</div>
+		<div id="varList" class="picklist" hidden></div>
+
+		<h2>Physics &amp; search</h2>
+		<div class="grid">
+			<label>Work plane height<input id="workH" type="number" value="0" min="0" step="0.1" /></label>
+			<label>Floor zone<input id="floorZone" type="number" value="0.5" min="0" step="0.1" /></label>
+			<label>Wall zone (empty = auto)<input id="wallZone" type="number" placeholder="auto" min="0" step="0.1" /></label>
+			<label
+				>Wall refl. (empty = 0.5)<input id="wallRefl" type="number" placeholder="default" min="0" max="1" step="0.05"
+			/></label>
+			<label
+				>Floor refl. (empty = 0.2)<input id="floorRefl" type="number" placeholder="default" min="0" max="1" step="0.05"
+			/></label>
+			<label
+				>Ceiling refl. (empty = 0.7)<input
+					id="ceilRefl"
+					type="number"
+					placeholder="default"
+					min="0"
+					max="1"
+					step="0.05"
+			/></label>
+			<label title="Leave all three empty for server auto (derived from room size + mounting height)">Spacing min (empty = auto)<input id="spMin" type="number" placeholder="auto" min="0.5" step="0.5" /></label>
+			<label title="Leave all three empty for server auto (derived from room size + mounting height)">Spacing max (empty = auto)<input id="spMax" type="number" placeholder="auto" min="0.5" step="0.5" /></label>
+			<label title="Leave all three empty for server auto (derived from room size + mounting height)">Spacing step (empty = auto)<input id="spStep" type="number" placeholder="auto" min="0.1" step="0.1" /></label>
+			<label title="How many compliant solutions to return (most compact first). Empty = 5.">Solutions returned — TopK (empty = 5)<input id="topK" type="number" value="5" min="1" max="20" step="1" /></label>
+			<label title="Allowed average excess over target (e.g. 0.3 = up to 30% over). Empty = standard default 0.3.">Max overdesign (empty = 0.3)<input id="maxOver" type="number" placeholder="0.3" min="0" step="0.1" /></label>
+			<label title="Stage A ranks every candidate with cheap direct-only light. Stage B re-verifies this many shortlisted candidates per fixture with full interreflection physics. Higher = more thorough but slower. Empty = 12.">Full verifications per fixture — Stage B (empty = 12)<input id="stageB" type="number" value="12" min="1" max="50" step="1" /></label>
+		</div>
+
+		<div class="row" style="margin: 16px 0">
+			<button id="btnRun" type="button" style="font-size: 16px; padding: 10px 28px">Run automate</button>
+			<span id="status"></span>
+		</div>
+
+		<h2 id="planTitle">Plan view (best solution)</h2>
+		<canvas id="plan" width="640" height="420"></canvas>
+		<div id="results"></div>
+
+		<script>
+			'use strict';
+			const $ = (id) => document.getElementById(id);
+
+			function num(id) {
+				const v = $(id).value.trim();
+				return v === '' ? undefined : Number(v);
+			}
+			function luxUrl() {
+				return $('luxBase').value.replace(/\/+$/, '');
+			}
+			function adminUrl() {
+				return $('adminBase').value.replace(/\/+$/, '');
+			}
+
+			function derivedApplication() {
+				const m = Number($('mountH').value);
+				return m <= 3.0 ? 'interior' : 'industrial';
+			}
+			function refreshBadge() {
+				const app = derivedApplication();
+				const b = $('appBadge');
+				b.textContent = app;
+				b.className = 'badge ' + app;
+			}
+			$('mountH').addEventListener('input', refreshBadge);
+			refreshBadge();
+
+			function roomPolygon() {
+				const custom = $('polyJson').value.trim();
+				if (custom) return JSON.parse(custom);
+				const w = Number($('roomW').value),
+					l = Number($('roomL').value);
+				return [
+					{ x: 0, y: 0 },
+					{ x: w, y: 0 },
+					{ x: w, y: l },
+					{ x: 0, y: l },
+				];
+			}
+
+			function spacingOrNull() {
+				// All three empty -> null (server auto). Partially filled ->
+				// blanks fall back to the server's auto floor values.
+				const lo = num('spMin'),
+					hi = num('spMax'),
+					st = num('spStep');
+				if (lo === undefined && hi === undefined && st === undefined) return null;
+				return { min: lo ?? 1.5, max: hi ?? 4.0, step: st ?? 0.5 };
+			}
+
+			function buildPayload() {
+				const variantIds = $('variantIds')
+					.value.split(/\s+/)
+					.map((s) => s.trim())
+					.filter(Boolean);
+				const spacing = spacingOrNull();
+				const p = {
+					polygon: roomPolygon(),
+					ceilingHeight: Number($('ceilingH').value),
+					mountingHeight: Number($('mountH').value),
+					activityId: $('activityId').value.trim(),
+					search: {
+						spacingX: spacing,
+						spacingY: spacing,
+						offsetFractions: [0.5],
+						rotations: [0.0],
+					},
+				};
+				const opt = {
+					workPlaneHeight: num('workH'),
+					floorZone: num('floorZone'),
+					wallZone: num('wallZone'),
+					wallReflectance: num('wallRefl'),
+					floorReflectance: num('floorRefl'),
+					ceilingReflectance: num('ceilRefl'),
+					topK: num('topK'),
+					stageB: num('stageB'),
+					maxOverdesign: num('maxOver'),
+				};
+				for (const [k, v] of Object.entries(opt)) if (v !== undefined && !Number.isNaN(v)) p[k] = v;
+				if (variantIds.length) p.variantIds = variantIds;
+				return p;
+			}
+
+			function setStatus(msg, cls) {
+				const el = $('status');
+				el.textContent = msg;
+				el.className = cls || '';
+			}
+
+			$('btnStandards').addEventListener('click', async () => {
+				const list = $('stdList');
+				list.hidden = false;
+				list.innerHTML = '<div>Loading…</div>';
+				try {
+					const r = await fetch(adminUrl() + '/standards/?limit=500');
+					if (!r.ok) throw new Error('HTTP ' + r.status);
+					const body = await r.json();
+					list.innerHTML = '';
+					for (const s of body.data || []) {
+						const p = s.parameters || {};
+						const d = document.createElement('div');
+						d.innerHTML = "<b></b> <span class='mono'></span>";
+						d.querySelector('b').textContent = (s.activity || s.id) + ` (em ${p.em_r_lx ?? '?'}, uo ${p.uo ?? '?'})`;
+						d.querySelector('span').textContent = s.id;
+						d.title = 'Click to use as activityId';
+						d.addEventListener('click', () => {
+							$('activityId').value = s.id;
+							$('stdHint').textContent = 'selected: ' + s.id;
+						});
+						list.appendChild(d);
+					}
+					if (!list.children.length) list.innerHTML = '<div>No standards found.</div>';
+				} catch (e) {
+					list.innerHTML = '<div>Failed: ' + e.message + ' (is the admin backend up? CORS enabled?)</div>';
+				}
+			});
+
+			$('btnVariants').addEventListener('click', async () => {
+				const list = $('varList');
+				list.hidden = false;
+				list.innerHTML = '<div>Loading…</div>';
+				try {
+					const app = derivedApplication();
+					const r = await fetch(
+						adminUrl() + '/fixtures/variants/?application=' + app + '&is_main_solution=true&limit=100',
+					);
+					if (!r.ok) throw new Error('HTTP ' + r.status);
+					const body = await r.json();
+					list.innerHTML = '';
+					for (const v of body.data || []) {
+						variantCache.set(v.id, v);
+						const d = document.createElement('div');
+						const label = `${v.name} — ${v.power}W x ${v.efficacy}lm/W = ${v.power * v.efficacy}lm`;
+						d.innerHTML = "<b></b><br><span class='mono'></span>";
+						d.querySelector('b').textContent = label;
+						d.querySelector('span').textContent = v.id;
+						d.title = 'Click to add to variantIds';
+						d.addEventListener('click', () => {
+							const cur = $('variantIds').value.trim();
+							$('variantIds').value = cur ? cur + '\n' + v.id : v.id;
+						});
+						list.appendChild(d);
+					}
+					if (!list.children.length) list.innerHTML = '<div>No main-solution variants for ' + app + '.</div>';
+				} catch (e) {
+					list.innerHTML = '<div>Failed: ' + e.message + ' (is the admin backend up? CORS enabled?)</div>';
+				}
+			});
+			$('btnClearVar').addEventListener('click', () => {
+				$('variantIds').value = '';
+			});
+
+			// Full variant objects keyed by variant UUID (demo-only cache).
+			const variantCache = new Map();
+			function esc(s) {
+				return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+			}
+			async function ensureVariants(ids, application) {
+				// The admin API has no GET /variants/{id} (variants are nested
+				// under fixtures), so missing entries are resolved through the
+				// same paginated list query the server uses for auto-list.
+				const missing = [...new Set(ids)].filter((id) => id && !variantCache.has(id));
+				if (!missing.length) return;
+				let page = 1;
+				for (;;) {
+					const r = await fetch(
+						adminUrl() + '/fixtures/variants/?application=' + application + '&is_main_solution=true&page=' + page + '&limit=100',
+					);
+					if (!r.ok) throw new Error('HTTP ' + r.status);
+					const body = await r.json();
+					for (const v of body.data || []) variantCache.set(v.id, v);
+					if (missing.every((id) => variantCache.has(id))) return;
+					const pg = body.pagination;
+					if (!pg || page >= pg.total_pages) return;
+					page += 1;
+				}
+			}
+
+			function drawPlan(polygon, placements, fixtures) {
+				const c = $('plan'),
+					ctx = c.getContext('2d');
+				ctx.clearRect(0, 0, c.width, c.height);
+				const xs = polygon.map((p) => p.x),
+					ys = polygon.map((p) => p.y);
+				const x0 = Math.min(...xs),
+					x1 = Math.max(...xs),
+					y0 = Math.min(...ys),
+					y1 = Math.max(...ys);
+				const pad = 30,
+					sx = (c.width - 2 * pad) / Math.max(x1 - x0, 0.01),
+					sy = (c.height - 2 * pad) / Math.max(y1 - y0, 0.01);
+				const s = Math.min(sx, sy);
+				const X = (x) => pad + (x - x0) * s,
+					Y = (y) => c.height - pad - (y - y0) * s;
+				ctx.beginPath();
+				polygon.forEach((p, i) => (i ? ctx.lineTo(X(p.x), Y(p.y)) : ctx.moveTo(X(p.x), Y(p.y))));
+				ctx.closePath();
+				ctx.fillStyle = '#eef1f4';
+				ctx.fill();
+				ctx.strokeStyle = '#333';
+				ctx.lineWidth = 2;
+				ctx.stroke();
+				// Luminous-opening rectangles (engine corners, top view).
+				(fixtures || []).forEach((fx) => {
+					if (!fx.corners || fx.corners.length < 3) return;
+					ctx.beginPath();
+					fx.corners.forEach((p, i) => (i ? ctx.lineTo(X(p.x), Y(p.y)) : ctx.moveTo(X(p.x), Y(p.y))));
+					ctx.closePath();
+					ctx.fillStyle = '#e07b0033';
+					ctx.fill();
+					ctx.strokeStyle = '#7a3f00';
+					ctx.lineWidth = 1;
+					ctx.stroke();
+				});
+				(placements || []).forEach((p, i) => {
+					ctx.beginPath();
+					ctx.arc(X(p.x), Y(p.y), 7, 0, 2 * Math.PI);
+					ctx.fillStyle = '#e07b00';
+					ctx.fill();
+					ctx.strokeStyle = '#7a3f00';
+					ctx.lineWidth = 1.5;
+					ctx.stroke();
+					ctx.fillStyle = '#000';
+					ctx.font = '10px sans-serif';
+					ctx.textAlign = 'center';
+					ctx.fillText(String(i + 1), X(p.x), Y(p.y) - 10);
+				});
+			}
+
+			function variantRows(v) {
+				if (!v) return '';
+				const fx = v.fixture || {};
+				// Variant API dimensions arrive in mm; display meters like the engine uses.
+				const dims = ['dimension_length', 'dimension_width', 'dimension_depth', 'dimension_radius']
+					.map((k) => v[k])
+					.filter((x) => x !== null && x !== undefined)
+					.map((x) => (Number(x) / 1000).toFixed(3));
+				const prot = [...(v.mechanical_protections || []), ...(v.electrical_protections || [])].join(', ');
+				return (
+					`<tr><td colspan="2"><b>${esc(fx.manufacturer_name)} ${esc(fx.name)} / ${esc(v.name)}</b><br>` +
+					`<span class="mono">${esc(v.id)}</span></td></tr>` +
+					`<tr><td>Chip / Driver</td><td>${esc(v.chip)} / ${esc(v.driver)}</td></tr>` +
+					`<tr><td>Rating</td><td>${v.power}W × ${v.efficacy}lm/W = ${v.power * v.efficacy}lm</td></tr>` +
+					`<tr><td>PF / CRI</td><td>${esc(v.power_factor)} / ${esc(v.cri)}</td></tr>` +
+					(prot ? `<tr><td>Protection</td><td>${esc(prot)}</td></tr>` : '') +
+					(dims.length ? `<tr><td>Dims (m)</td><td class="mono">${dims.map(esc).join(' × ')}</td></tr>` : '') +
+					(v.ies_file ? `<tr><td>IES</td><td class="mono">${esc(v.ies_file.original_filename)}</td></tr>` : '')
+				);
+			}
+
+			// Plan preview selection: click a solution card to draw it.
+			// lastPlan is set on every run; selectSolution(-1) clears.
+			let lastPlan = null;
+			function selectSolution(i) {
+				if (!lastPlan || !lastPlan.sols[i]) return;
+				lastPlan.sel = i;
+				document.querySelectorAll('#results .card[data-sol]').forEach((el) => {
+					el.classList.toggle('sel', Number(el.dataset.sol) === i);
+				});
+				const s = lastPlan.sols[i];
+				drawPlan(lastPlan.polygon, s.placements, s.fixtures);
+				$('planTitle').textContent =
+					`Plan view — solution ${i + 1} (${s.variantId.slice(0, 8)} × ${s.fixtureCount}` +
+					`${s.recommended === false ? ', not recommended' : ''})`;
+			}
+			$('results').addEventListener('click', (e) => {
+				const card = e.target.closest('[data-sol]');
+				if (card) selectSolution(Number(card.dataset.sol));
+			});
+
+			function solCard(sol, best, variant, idx) {
+				const g = sol.grid || {};
+				const f = (v, d = 1) => (v === null || v === undefined ? '—' : Number(v).toFixed(d));
+				const missLabel = { under_target: 'under target — too dim', over_cap: 'over cap — too bright', uniformity: 'uniformity too low' }[sol.missReason];
+				let badge = '';
+				if (sol.recommended === false && sol.missReason === 'over_cap')
+					badge = `<div class="badge" style="background:#b7791f;color:#fff" title="Over the max-overdesign cap: shown for reference, not recommended">not recommended — over cap</div>`;
+				else if (missLabel)
+					badge = `<div class="badge" style="background:#c0392b;color:#fff" title="First failing check">miss: ${missLabel}</div>`;
+				return `<div class="card${best ? ' best' : ''}"${idx !== undefined ? ` data-sol="${idx}" title="Click to draw in plan view"` : ''}>
+    <h3>${best ? 'Best — ' : ''}<span class="mono">${sol.variantId.slice(0, 8)}</span> × ${sol.fixtureCount} ${badge}</h3>
+    <table>
+      ${variantRows(variant)}
+      <tr><td>Average</td><td>${f(sol.average)} lx</td></tr>
+      <tr><td>Min / Max</td><td>${f(sol.minimum)} / ${f(sol.maximum)} lx</td></tr>
+      <tr><td>Uniformity</td><td>${f(sol.uniformity, 3)}</td></tr>
+      <tr><td>Overdesign</td><td>${f((sol.overdesign || 0) * 100, 1)} %</td></tr>
+      <tr><td>Power</td><td>${f(sol.powerW, 1)} W (${f(sol.powerDensity, 2)} W/m²)</td></tr>
+      <tr><td>Grid</td><td class="mono">${f(g.spacingX)}×${f(g.spacingY)} off ${f(g.offsetX)},${f(g.offsetY)} rot ${f(g.rotation, 0)}°</td></tr>
+      <tr><td>Placements</td><td>${(sol.placements || []).length}</td></tr>
+    </table></div>`;
+			}
+
+			$('btnRun').addEventListener('click', async () => {
+				setStatus('');
+				$('results').innerHTML = '';
+				let payload;
+				try {
+					payload = buildPayload();
+				} catch (e) {
+					setStatus('Bad input: ' + e.message, 'err');
+					return;
+				}
+				setStatus(
+					'POST ' +
+						luxUrl() +
+						'/automate … (' +
+						derivedApplication() +
+						', ' +
+						(payload.variantIds ? payload.variantIds.length + ' explicit variant(s)' : 'auto-list') +
+						')',
+				);
+				const t0 = performance.now();
+				try {
+					const r = await fetch(luxUrl() + '/automate', {
+						method: 'POST',
+						headers: { 'Content-Type': 'application/json' },
+						body: JSON.stringify(payload),
+					});
+					const ms = Math.round(performance.now() - t0);
+					const body = await r.json().catch(() => ({}));
+					if (!r.ok) {
+						const det = body.error ? `${body.error.code}: ${body.error.message}` : JSON.stringify(body).slice(0, 500);
+						setStatus(`HTTP ${r.status} in ${ms} ms — ${det}`, 'err');
+						return;
+					}
+					const sols = body.solutions || [];
+					const allIds = sols.map((s) => s.variantId);
+					if (body.closestMiss) allIds.push(body.closestMiss.variantId);
+					let varNote = '';
+					try {
+						await ensureVariants(allIds, derivedApplication());
+					} catch (e) {
+						varNote = ` (variant details unavailable: ${e.message})`;
+					}
+					setStatus(
+						`200 in ${ms} ms — target ${body.target.avgLux} lx / U0 ${body.target.uniformity} / +${body.target.maxOverdesign * 100}% ` +
+							`[app=${body.application} (server)] — ` +
+							`A=${body.evaluatedA} B=${body.evaluatedB}, ${body.solutions.length} solution(s)${varNote}`,
+						'ok',
+					);
+					lastPlan = { polygon: payload.polygon, sols, sel: -1 };
+					const ax = body.appliedSpacingX,
+						ay = body.appliedSpacingY;
+					const sp =
+						ax && ay
+							? `spacing X ${ax.min}–${ax.max} step ${ax.step} / Y ${ay.min}–${ay.max} step ${ay.step}`
+							: 'spacing n/a';
+					let html =
+						`<div class="mono">pruned: ${JSON.stringify(body.pruned)}<br>applied ${sp}</div><div class="cards">` +
+						sols.map((s, i) => solCard(s, i === 0 && s.recommended !== false, variantCache.get(s.variantId), i)).join('') +
+						'</div>';
+					if (body.closestMiss)
+						html += "<h2>Closest miss</h2><div class='cards'>" + solCard(body.closestMiss, false, variantCache.get(body.closestMiss.variantId)) + '</div>';
+					$('results').innerHTML = html;
+					if (sols.length) selectSolution(Math.max(0, sols.findIndex((s) => s.recommended !== false)));
+					else {
+						drawPlan(payload.polygon, []);
+						$('planTitle').textContent = 'Plan view (best solution)';
+					}
+				} catch (e) {
+					setStatus('Request failed: ' + e.message + ' (is LuxScale running at ' + luxUrl() + '?)', 'err');
+				}
+			});
+
+			// Initial empty plan from the rectangle inputs.
+			drawPlan(roomPolygon(), []);
+		</script>
+	</body>
+</html>

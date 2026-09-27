@@ -51,12 +51,49 @@ class IESProfile:
 
 
 @dataclass(frozen=True)
+class FixturePlacement:
+    """Free fixture position. Engine input — no grid coupling.
+
+    Each entry may carry its own photometry (heterogeneous layouts);
+    ies_ref keys into the profiles map handed to the engine,
+    None resolves to the caller-supplied default profile.
+    """
+
+    id: str
+    x: float
+    y: float
+    z: float | None = None
+    rotation: float = 0.0
+    aim_direction: Vec3 = (0.0, 0.0, -1.0)
+    ies_ref: str | None = None
+
+
+@dataclass(frozen=True)
 class Fixture:
     id: str
     position: Vec3
     aim_direction: Vec3
     rotation: float
     ies_profile: IESProfile
+
+
+@dataclass(frozen=True)
+class FixtureGeometry:
+    """Visualization-ready fixture shape (no photometry tables attached).
+
+    Built from an engine Fixture via fixture_geometries(): world position
+    (luminous-plane height included), housing rotation, opening size and
+    the world-space opening corners + sample elements for drawing.
+    """
+
+    id: str
+    position: Vec3
+    rotation: float
+    length: float
+    width: float
+    height: float
+    corners: list[Vec3]
+    elements: list[Vec3]
 
 
 @dataclass(frozen=True)

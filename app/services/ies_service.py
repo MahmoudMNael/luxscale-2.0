@@ -92,6 +92,17 @@ def get_candela(profile: IESProfile, theta_vertical_deg: float, phi_horizontal_d
     return _lerp(lo, hi, tv) * scale
 
 
+def installed_flux(profile: IESProfile) -> float:
+    """Maintained-light flux per fixture, lumens.
+
+    load_ies normalizes candela so the zonal integral equals the rated
+    lamps×lumens; recover it here without re-parsing (falls back to the raw
+    measured flux for relative photometry with no rating).
+    """
+    return _zonal_lumens(profile.vertical_angles, profile.horizontal_angles,
+                         profile.candela_table) * profile.multiplier * profile.flux_scale
+
+
 def _zonal_lumens(vertical: list[float], horizontal: list[float], table: list[list[float]]) -> float:
     n_v, n_h = len(vertical), len(horizontal)
     if n_v < 2 or n_h < 1:

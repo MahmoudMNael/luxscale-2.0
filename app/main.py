@@ -9,7 +9,8 @@ from fastapi.openapi.utils import get_openapi
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.controllers.calculate_controller import router
+from app.controllers.calculate_controller import router as calculate_router
+from app.controllers.automate_controller import router as automate_router
 from app.domain.exceptions import AppError
 from app.exception_handlers import (
     app_error_handler,
@@ -17,10 +18,13 @@ from app.exception_handlers import (
     utf8_error_handler,
     validation_handler,
 )
+from app.config import load_env_file
 from app.logging_config import configure_logging
 from app.middleware.request_context import RequestContextMiddleware
 from app.schemas.calculate import CalculateRequest
+from app.schemas.automate import AutomateRequest
 
+load_env_file()  # `.env` fills process env (exported vars win); no-op if missing.
 configure_logging()
 
 _DEMO_DIR = Path(__file__).resolve().parents[1] / "demo"
@@ -34,7 +38,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.add_middleware(RequestContextMiddleware)
-app.include_router(router)
+app.include_router(calculate_router)
+app.include_router(automate_router)
 app.add_exception_handler(AppError, app_error_handler)
 app.add_exception_handler(UnicodeDecodeError, utf8_error_handler)
 app.add_exception_handler(RequestValidationError, validation_handler)
@@ -55,6 +60,10 @@ def _openapi() -> dict:
     components = schema.setdefault("components", {}).setdefault("schemas", {})
     components.update(defs)
     components["CalculateRequest"] = js
+    ojs = AutomateRequest.model_json_schema(ref_template="#/components/schemas/{model}")
+    odefs = ojs.pop("$defs", {})
+    components.update(odefs)
+    components["AutomateRequest"] = ojs
     schema["paths"]["/calculate"]["post"]["requestBody"] = {
         "required": True,
         "content": {
@@ -67,7 +76,12 @@ def _openapi() -> dict:
                         "iesFile": {
                             "type": "string",
                             "format": "binary",
-                            "description": "IES LM-63 photometry text file",
+                            "description": "Default IES LM-63 photometry text file",
+                        },
+                        "iesFiles": {
+                            "type": "array",
+                            "items": {"type": "string", "format": "binary"},
+                            "description": "Extra IES files keyed by filename for per-fixture iesRef",
                         },
                     },
                 },
