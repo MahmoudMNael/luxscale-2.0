@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 
 from app.domain.exceptions import NoFixturesError
-from app.domain.models import Fixture, FixturePlacement, IESProfile, Room, Vec3
+from app.domain.models import Fixture, FixtureGeometry, FixturePlacement, IESProfile, Room, Vec3
 from app.schemas.grid import GridInput
 from app.services.vector_math import EPS, normalize, point_in_polygon
 
@@ -78,6 +78,26 @@ def generate_fixture_grid(
     return build_fixtures(
         room.polygon, placements, {"default": ies_profile}, mounting_height, "default"
     )
+
+
+def fixture_geometries(fixtures: list[Fixture]) -> list[FixtureGeometry]:
+    """Engine fixtures -> visualization-ready geometry (no photometry tables)."""
+    out: list[FixtureGeometry] = []
+    for fixture in fixtures:
+        corners, elements = luminous_opening(fixture)
+        out.append(
+            FixtureGeometry(
+                id=fixture.id,
+                position=fixture.position,
+                rotation=fixture.rotation,
+                length=fixture.ies_profile.length,
+                width=fixture.ies_profile.width,
+                height=fixture.ies_profile.height,
+                corners=corners,
+                elements=elements,
+            )
+        )
+    return out
 
 
 def luminous_opening(fixture: Fixture) -> tuple[list[Vec3], list[Vec3]]:

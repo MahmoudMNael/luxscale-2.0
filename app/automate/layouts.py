@@ -36,6 +36,43 @@ def frange(lo: float, hi: float, step: float) -> list[float]:
     return out
 
 
+# Auto-spacing rule (used when search.spacingX/Y is left empty).
+# EDIT HERE to change what "auto" means.
+AUTO_SPACING_MIN = 1.5
+AUTO_SPACING_STEP = 0.5
+
+
+def auto_spacing_range(
+    polygon: list[tuple[float, float]],
+    mount_h: float,
+    shr_max: float,
+    combo_multiplier: int,
+    max_candidates: int,
+) -> tuple[float, float, float]:
+    """(min, max, step) derived from room size + mounting height.
+
+    - max: tightest of the SHR cap (`shr_max x mount_h`) and the longest
+      room-bbox side (never wider than the room itself).
+    - min: fixed floor (`AUTO_SPACING_MIN`); tiny rooms where max < min
+      collapse to a single spacing instead of 422ing.
+    - step: `AUTO_SPACING_STEP`, doubled until
+      `len(x) x len(y) x combo_multiplier <= max_candidates`, where
+      `combo_multiplier = len(offsets) x len(rotations)`.
+    """
+    xs = [p[0] for p in polygon]
+    ys = [p[1] for p in polygon]
+    longest = max(max(xs) - min(xs), max(ys) - min(ys))
+    hi = min(shr_max * mount_h, longest)
+    lo = min(AUTO_SPACING_MIN, hi)
+    step = AUTO_SPACING_STEP
+    for _ in range(20):  # safety bound; normally exits on the first pass
+        n = len(frange(lo, hi, step)) ** 2 * max(combo_multiplier, 1)
+        if n <= max_candidates:
+            break
+        step *= 2.0
+    return (round(lo, 3), round(hi, 3), round(step, 3))
+
+
 def enumerate_layouts(
     polygon: list[tuple[float, float]],
     mount_h: float,

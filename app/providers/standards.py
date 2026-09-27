@@ -100,6 +100,7 @@ class RestStandardProvider:
     def __init__(self, base_url: str | None = None, timeout_s: float = 5.0) -> None:
         base = base_url if base_url is not None else os.environ.get("STANDARDS_BASE_URL", "")
         self.base_url = api_base(base) if base.rstrip("/") else ""
+        print(f"RestStandardProvider: base_url={self.base_url}, timeout_s={timeout_s}")
         self.timeout_s = timeout_s
 
     def get_target(self, activity_id: str) -> StandardTarget:

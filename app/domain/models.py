@@ -78,6 +78,25 @@ class Fixture:
 
 
 @dataclass(frozen=True)
+class FixtureGeometry:
+    """Visualization-ready fixture shape (no photometry tables attached).
+
+    Built from an engine Fixture via fixture_geometries(): world position
+    (luminous-plane height included), housing rotation, opening size and
+    the world-space opening corners + sample elements for drawing.
+    """
+
+    id: str
+    position: Vec3
+    rotation: float
+    length: float
+    width: float
+    height: float
+    corners: list[Vec3]
+    elements: list[Vec3]
+
+
+@dataclass(frozen=True)
 class Matrix:
     values: list[float]
     metadata: dict[str, Any] = field(default_factory=dict)

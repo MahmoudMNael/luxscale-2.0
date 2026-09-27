@@ -37,6 +37,21 @@ from app.services.variant_photometrics import variant_lumens, variant_wattage
 API_PREFIX = "/api/v1"
 _PAGE_LIMIT = 100
 
+# Variant API dimensions arrive in MILLIMETERS (metric); FixtureSpec and the
+# engine work in meters. Single conversion point — EDIT HERE if the unit changes.
+MM_PER_M = 1000.0
+
+
+def _mm_to_m(value: float | None) -> float | None:
+    """mm -> m; None/non-positive pass through as None (IES fallback applies)."""
+    if value is None:
+        return None
+    try:
+        meters = float(value) / MM_PER_M
+    except (TypeError, ValueError):
+        return None
+    return meters if meters > 0 else None
+
 
 def api_base(base_url: str) -> str:
     """Base URL + `/api/v1`, unless the base URL already ends with it.
@@ -63,6 +78,11 @@ class FixtureSpec:
     lumens: float | None = None
     efficacy: float | None = None
     power: float | None = None
+    # Luminous-opening size in METERS (converted from the variant API's
+    # millimeters). None per axis = fall back to the IES header value.
+    length: float | None = None
+    width: float | None = None
+    height: float | None = None
     is_main_solution: bool = True
     applications: tuple[str, ...] = ("interior",)
 
@@ -125,6 +145,7 @@ class RestFixtureProvider:
         base = base_url if base_url is not None else os.environ.get("FIXTURES_BASE_URL", "")
         self.base_url = api_base(base) if base.rstrip("/") else ""
         self.timeout_s = timeout_s
+        print(f"RestFixtureProvider: base_url={self.base_url}, timeout_s={timeout_s}")
 
     def _fetch_all_main_variants(self, application: str) -> list[VariantDetailResponse]:
         if not self.base_url:
@@ -164,18 +185,7 @@ class RestFixtureProvider:
 
     def _to_spec(self, variant: VariantDetailResponse) -> FixtureSpec:
         ies_text = self._download_ies(variant.ies_file_id)
-        return FixtureSpec(
-            id=str(variant.id),
-            fixture_id=str(variant.fixture_id),
-            variant_id=str(variant.id),
-            ies_text=ies_text,
-            wattage=variant_wattage(variant),
-            lumens=variant_lumens(variant),
-            efficacy=float(variant.efficacy),
-            power=float(variant.power),
-            is_main_solution=bool(variant.fixture.is_main_solution),
-            applications=tuple(variant.fixture.applications),
-        )
+        return spec_from_variant(variant, ies_text)
 
     def list_main_variants(self, application: str) -> list[FixtureSpec]:
         variants = self._fetch_all_main_variants(application)
@@ -251,10 +261,41 @@ class InMemoryFixtureProvider:
         return [self.get_one(fid) for fid in fixture_ids]
 
 
+def spec_from_variant(variant: VariantDetailResponse, ies_text: str) -> FixtureSpec:
+    """VariantDetailResponse + downloaded IES text -> FixtureSpec (pure, no I/O).
+
+    Dimensions convert mm -> m here; None per axis means "fall back to the
+    IES header value" downstream (see apply_variant_dimensions).
+    """
+    length = _mm_to_m(variant.dimension_length)
+    width = _mm_to_m(variant.dimension_width)
+    if length is None and width is None:
+        # Round opening with no rectangular dims: square from the radius.
+        radius_m = _mm_to_m(variant.dimension_radius)
+        if radius_m is not None:
+            length = width = 2.0 * radius_m
+    return FixtureSpec(
+        id=str(variant.id),
+        fixture_id=str(variant.fixture_id),
+        variant_id=str(variant.id),
+        ies_text=ies_text,
+        wattage=variant_wattage(variant),
+        lumens=variant_lumens(variant),
+        efficacy=float(variant.efficacy),
+        power=float(variant.power),
+        length=length,
+        width=width,
+        height=_mm_to_m(variant.dimension_depth),
+        is_main_solution=bool(variant.fixture.is_main_solution),
+        applications=tuple(variant.fixture.applications),
+    )
+
+
 __all__ = [
     "FixtureProvider",
     "FixtureSpec",
     "InMemoryFixtureProvider",
     "RestFixtureProvider",
     "api_base",
+    "spec_from_variant",
 ]

@@ -18,11 +18,13 @@ from app.exception_handlers import (
     utf8_error_handler,
     validation_handler,
 )
+from app.config import load_env_file
 from app.logging_config import configure_logging
 from app.middleware.request_context import RequestContextMiddleware
 from app.schemas.calculate import CalculateRequest
 from app.schemas.automate import AutomateRequest
 
+load_env_file()  # `.env` fills process env (exported vars win); no-op if missing.
 configure_logging()
 
 _DEMO_DIR = Path(__file__).resolve().parents[1] / "demo"

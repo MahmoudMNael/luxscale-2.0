@@ -19,7 +19,7 @@ from app.app_settings import (
     WORK_PLANE_HEIGHT,
     C0_ORIENTATION_OFFSET_DEG,
 )
-from app.domain.models import Fixture, FixturePlacement, Matrix, Patch, Vec2, Vec3  # noqa: F401
+from app.domain.models import Fixture, FixtureGeometry, FixturePlacement, Matrix, Patch, Vec2, Vec3  # noqa: F401
 
 Weights = tuple[list[int], list[int], list[float], int, int]
 

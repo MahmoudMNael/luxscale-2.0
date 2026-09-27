@@ -65,9 +65,31 @@ def scale_profile_to_lumens(profile: IESProfile, target_lumens: float) -> IESPro
     return replace(profile, flux_scale=profile.flux_scale * target_lumens / current)
 
 
+def apply_variant_dimensions(
+    profile: IESProfile,
+    length: float | None,
+    width: float | None,
+    height: float | None,
+) -> IESProfile:
+    """Override the IES opening size with variant-API dimensions (METERS).
+
+    Per-axis independent: None/non-positive keeps the IES header value for
+    that axis. EDIT HERE if the dimension mapping ever changes.
+    """
+    updates: dict = {}
+    if length is not None and length > 0:
+        updates["length"] = float(length)
+    if width is not None and width > 0:
+        updates["width"] = float(width)
+    if height is not None and height > 0:
+        updates["height"] = float(height)
+    return replace(profile, **updates) if updates else profile
+
+
 __all__ = [
     "VARIANT_EFFICACY_FIELD",
     "VARIANT_WATTS_FIELD",
+    "apply_variant_dimensions",
     "scale_profile_to_lumens",
     "variant_lumens",
     "variant_wattage",

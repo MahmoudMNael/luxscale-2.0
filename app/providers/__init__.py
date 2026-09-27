@@ -5,6 +5,7 @@ from app.providers.fixtures import (
     FixtureSpec,
     InMemoryFixtureProvider,
     RestFixtureProvider,
+    spec_from_variant,
 )
 from app.providers.standards import (
     InMemoryStandardProvider,
@@ -22,4 +23,5 @@ __all__ = [
     "RestStandardProvider",
     "StandardProvider",
     "StandardTarget",
+    "spec_from_variant",
 ]
