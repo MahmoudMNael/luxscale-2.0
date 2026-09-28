@@ -208,11 +208,14 @@ def resolve_fixtures(
     if default_ref is None and len(profiles) == 1:
         default_ref = next(iter(profiles))
     for placement in placements:
-        ref = placement.ies_ref or default_ref
-        if ref is None or ref not in profiles:
+        v_id = getattr(placement, "variant_id", None)
+        i_ref = getattr(placement, "ies_ref", None)
+        ref = v_id or i_ref or default_ref
+        if ref is None or (ref not in profiles and i_ref not in profiles and v_id not in profiles):
+            unknown = v_id or i_ref or "none"
             raise IesParseError(
                 f"Fixture '{placement.id}' references unknown photometry "
-                f"'{placement.ies_ref}' (no default IES file given)."
+                f"'{unknown}' (no default IES file given)."
             )
     return build_fixtures(room.polygon, placements, profiles, mounting_default, default_ref)
 

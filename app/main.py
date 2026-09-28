@@ -67,6 +67,9 @@ def _openapi() -> dict:
     schema["paths"]["/calculate"]["post"]["requestBody"] = {
         "required": True,
         "content": {
+            "application/json": {
+                "schema": {"$ref": "#/components/schemas/CalculateRequest"}
+            },
             "multipart/form-data": {
                 "schema": {
                     "type": "object",

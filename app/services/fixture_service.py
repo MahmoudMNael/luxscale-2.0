@@ -32,7 +32,16 @@ def build_fixtures(
         if not point_in_polygon((placement.x, placement.y), polygon):
             _log.warning("fixture %s outside room polygon, skipped", placement.id)
             continue
-        profile = profiles.get(placement.ies_ref or default_ref or "")
+        v_id = getattr(placement, "variant_id", None)
+        i_ref = getattr(placement, "ies_ref", None)
+        ref = v_id or i_ref or default_ref or ""
+        profile = profiles.get(ref)
+        if profile is None and i_ref:
+            profile = profiles.get(i_ref)
+        if profile is None and v_id:
+            profile = profiles.get(v_id)
+        if profile is None and default_ref:
+            profile = profiles.get(default_ref)
         if profile is None:  # caller validates refs; guard for direct use
             raise NoFixturesError(f"Fixture '{placement.id}' has no photometry profile.")
         z = placement.z if placement.z is not None else mounting_default - profile.height / 2.0
@@ -43,6 +52,8 @@ def build_fixtures(
                 aim_direction=normalize(placement.aim_direction),
                 rotation=placement.rotation,
                 ies_profile=profile,
+                variant_id=v_id,
+                ies_ref=i_ref,
             )
         )
     if not fixtures:
@@ -95,6 +106,8 @@ def fixture_geometries(fixtures: list[Fixture]) -> list[FixtureGeometry]:
                 height=fixture.ies_profile.height,
                 corners=corners,
                 elements=elements,
+                variant_id=fixture.variant_id,
+                ies_ref=fixture.ies_ref,
             )
         )
     return out

@@ -36,6 +36,8 @@ class FixtureDto(BaseModel):
     height: float = Field(..., description="Luminous opening height, metres")
     corners: list[Vec3Dto] = Field(..., min_length=4, max_length=4, description="World-space opening corners, CCW")
     elements: list[Vec3Dto] = Field(..., min_length=1, description="Sample points used in the direct I/N sum")
+    variantId: str | None = Field(default=None, description="Catalog variant UUID if assigned")
+    iesRef: str | None = Field(default=None, description="Photometry key or uploaded IES filename if assigned")
 
 
 class FixturePlacementDto(BaseModel):
@@ -50,10 +52,64 @@ class FixturePlacementDto(BaseModel):
     rotation: float | None = Field(
         default=None, ge=0, le=360, description="In-room rotation; defaults to luminaireRotation"
     )
+    tiltAngle: float | None = Field(
+        default=0.0, ge=0, le=90, description="Tilt from straight down, degrees (0 = downlight)"
+    )
     aimDirection: Vec3Dto | None = Field(default=None, description="Aim; defaults to straight down")
+    variantId: str | None = Field(
+        default=None, description="Catalog variant UUID from fixtures provider for this fixture"
+    )
     iesRef: str | None = Field(
         default=None, description="Photometry key: uploaded IES filename or provider fixture id"
     )
+
+
+class ComplianceTargetInput(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, serialize_by_alias=True)
+
+    activityId: str | None = Field(
+        default=None, description="Standard ID key to look up from standards provider (e.g. en12464_1_v2019_6_1_1)"
+    )
+    targetLux: float | None = Field(default=None, gt=0, description="Explicit target maintained lux")
+    targetUniformity: float | None = Field(
+        default=None, ge=0, le=1, description="Explicit target uniformity U0 (Emin / Eavg)"
+    )
+    maxOverdesign: float = Field(default=0.3, ge=0, description="Allowed excess average lux ratio (0.3 = +30%)")
+
+
+class ComplianceResultDto(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, serialize_by_alias=True)
+
+    compliant: bool = Field(..., description="Whether the layout passed both target lux and uniformity checks")
+    targetLux: float = Field(..., description="Applied target average lux")
+    targetUniformity: float = Field(..., description="Applied target uniformity U0")
+    luxGap: float = Field(..., description="Eavg - targetLux (positive means above target)")
+    uniformityGap: float = Field(..., description="U0 - targetUniformity (positive means above target)")
+    overdesign: float = Field(..., description="Eavg / targetLux - 1 (0.25 = +25%)")
+
+
+class VariantResultDto(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, serialize_by_alias=True)
+
+    variantId: str | None = Field(default=None, description="Catalog variant UUID or profile key")
+    evaluation: EvaluationDto
+    totalFloorIlluminance: MatrixDto
+    compliance: ComplianceResultDto | None = None
+    powerW: float | None = None
+    powerDensity: float | None = None
+    fixtures: list[FixtureDto]
+
+    # Detailed matrices (included when includeWallCeilingMatrices is True)
+    wallEvaluations: dict[str, EvaluationDto] = Field(default_factory=dict)
+    ceilingEvaluation: EvaluationDto | None = None
+    totalWallIlluminance: dict[str, MatrixDto] = Field(default_factory=dict)
+    totalCeilingIlluminance: MatrixDto | None = None
+    directFloorMatrices: dict[str, MatrixDto] = Field(default_factory=dict)
+    indirectFloorMatrices: dict[str, MatrixDto] = Field(default_factory=dict)
+    directWallMatrices: dict[str, dict[str, MatrixDto]] = Field(default_factory=dict)
+    indirectWallMatrices: dict[str, dict[str, MatrixDto]] = Field(default_factory=dict)
+    directCeilingMatrices: dict[str, MatrixDto] = Field(default_factory=dict)
+    indirectCeilingMatrices: dict[str, MatrixDto] = Field(default_factory=dict)
 
 
 class CalculateRequest(BaseModel):
@@ -83,22 +139,25 @@ class CalculateRequest(BaseModel):
         min_length=3,
         description="Room footprint vertices in meters (closing vertex optional)",
     )
-    height: float = Field(..., gt=0, description="Room height in meters (fallback for ceiling/mounting heights)")
-    ceilingHeight: float | None = Field(
-        default=None,
+    ceilingHeight: float = Field(
+        ...,
         gt=0,
-        description="Ceiling plane height in meters; walls extend to this. Defaults to height.",
+        description="Ceiling plane height in meters; walls extend to this.",
     )
-    mountingHeight: float | None = Field(
-        default=None,
+    mountingHeight: float = Field(
+        ...,
         gt=0,
-        description="Fixture mounting height in meters (e.g. pendant drop below ceiling). Defaults to ceilingHeight.",
+        description="Fixture mounting height in meters.",
     )
     grid: GridInput | None = Field(
-        default=None, description="Regular luminaire grid (legacy). Exactly one of grid/fixtures."
+        default=None, description="Regular or flexible luminaire grid. Exactly one of grid/fixtures."
     )
     fixtures: list[FixturePlacementDto] | None = Field(
         default=None, min_length=1, description="Free fixture positions. Exactly one of grid/fixtures."
+    )
+    variantId: str | None = Field(
+        default=None,
+        description="Default catalog variant UUID from fixtures provider; used when grid is specified or when individual fixtures omit variantId/iesRef",
     )
     workPlaneHeight: float = Field(
         default=0.0,
@@ -121,14 +180,32 @@ class CalculateRequest(BaseModel):
         le=360,
         description="In-room rotation of the luminaire housing in degrees, added to the photometric C-planes",
     )
+    wallReflectance: float | None = Field(
+        default=None, ge=0, le=1, description="Wall reflectance factor (default 0.5)"
+    )
+    floorReflectance: float | None = Field(
+        default=None, ge=0, le=1, description="Floor reflectance factor (default 0.2)"
+    )
+    ceilingReflectance: float | None = Field(
+        default=None, ge=0, le=1, description="Ceiling reflectance factor (default 0.7)"
+    )
+    maintenanceFactor: float | None = Field(
+        default=None, gt=0, le=1, description="Maintenance factor (default 0.8)"
+    )
+    bounces: int | None = Field(
+        default=None, ge=0, le=10, description="Radiosity bounces; 0 = direct only, 3 = full radiosity (default 3)"
+    )
+    compliance: ComplianceTargetInput | None = Field(
+        default=None, description="Target standard or explicit lux/uniformity goals"
+    )
+    includeWallCeilingMatrices: bool = Field(
+        default=True,
+        description="Include detailed per-wall and per-fixture direct/indirect matrices (set False for compact response)",
+    )
 
     @model_validator(mode="after")
     def _check_mounting_not_above_ceiling(self):
-        if (
-            self.ceilingHeight is not None
-            and self.mountingHeight is not None
-            and self.mountingHeight > self.ceilingHeight
-        ):
+        if self.mountingHeight > self.ceilingHeight:
             raise ValueError("mountingHeight cannot exceed ceilingHeight")
         if (self.grid is None) == (self.fixtures is None):
             raise ValueError("Exactly one of 'grid' or 'fixtures' must be given.")
@@ -138,18 +215,18 @@ class CalculateRequest(BaseModel):
 class CalculateResponse(BaseModel):
     fixtures: list[FixtureDto]
     floorPatches: list[PatchDto]
-    wallPatches: dict[str, list[PatchDto]] = Field(..., description="wallId → patches")
+    wallPatches: dict[str, list[PatchDto]] = Field(default_factory=dict, description="wallId → patches")
     ceilingPatches: list[PatchDto] = Field(default_factory=list, description="ceiling patches")
-    directFloorMatrices: dict[str, MatrixDto] = Field(..., description="fixtureId → matrix")
+    directFloorMatrices: dict[str, MatrixDto] = Field(default_factory=dict, description="fixtureId → matrix")
     directWallMatrices: dict[str, dict[str, MatrixDto]] = Field(
-        ...,
+        default_factory=dict,
         description="wallId → fixtureId → matrix",
     )
     directCeilingMatrices: dict[str, MatrixDto] = Field(
         default_factory=dict, description="fixtureId → ceiling matrix"
     )
     indirectFloorMatrices: dict[str, MatrixDto] = Field(
-        ...,
+        default_factory=dict,
         description="originId → floor matrix from interreflection (walls, floor and ceiling re-emit), "
         "summed over all bounces originating from that surface",
     )
@@ -173,11 +250,17 @@ class CalculateResponse(BaseModel):
     ceilingReflectance: float = Field(
         default=0.7, description="Applied ceiling reflectance (app_settings.CEILING_REFLECTANCE_FACTOR)"
     )
+    maintenanceFactor: float = Field(default=0.8, description="Applied maintenance factor")
     ceilingHeight: float = Field(..., description="Applied ceiling plane height in meters")
     mountingHeight: float = Field(..., description="Applied fixture mounting height in meters")
     solverCell: float = Field(
-        default=0.3, description="Effective radiosity solver cell in meters (0.3 unless the room needed more than MAX_SOLVER_PATCHES sources and was adaptively coarsened)"
+        default=0.3, description="Effective radiosity solver cell in meters"
     )
     solverDegraded: bool = Field(
-        default=False, description="True when the solver mesh was coarsened beyond SOLVER_CELL to respect MAX_SOLVER_PATCHES (large rooms only)"
+        default=False, description="True when the solver mesh was coarsened beyond SOLVER_CELL"
     )
+    compliance: ComplianceResultDto | None = Field(default=None, description="Compliance summary if target was requested")
+    powerW: float | None = Field(default=None, description="Total installed power in Watts (sum across all fixtures)")
+    powerDensity: float | None = Field(default=None, description="Installed power density in W/m²")
+    results: list[VariantResultDto] = Field(default_factory=list, description="Results per evaluated variant")
+

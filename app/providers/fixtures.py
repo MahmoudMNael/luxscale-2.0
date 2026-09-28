@@ -89,7 +89,13 @@ class FixtureSpec:
 
 class FixtureProvider(Protocol):
     def list_main_variants(self, application: str) -> list[FixtureSpec]: ...
-    def get_variants(self, variant_ids: list[str], application: str) -> list[FixtureSpec]: ...
+    def get_variants(
+        self,
+        variant_ids: list[str],
+        application: str | None = None,
+        *,
+        main_only: bool = True,
+    ) -> list[FixtureSpec]: ...
 
 
 def _get_json(url: str, timeout_s: float) -> dict:
@@ -147,22 +153,22 @@ class RestFixtureProvider:
         self.timeout_s = timeout_s
         print(f"RestFixtureProvider: base_url={self.base_url}, timeout_s={timeout_s}")
 
-    def _fetch_all_main_variants(self, application: str) -> list[VariantDetailResponse]:
+    def _fetch_variants(
+        self,
+        application: str | None = None,
+        is_main_solution: bool | None = None,
+    ) -> list[VariantDetailResponse]:
         if not self.base_url:
             raise ProviderError("FIXTURES_BASE_URL is not configured.")
-        if application not in ("interior", "industrial"):
-            raise ProviderError(f"Unknown application '{application}'.")
         out: list[VariantDetailResponse] = []
         page = 1
         while True:
-            query = urllib.parse.urlencode(
-                {
-                    "application": application,
-                    "is_main_solution": "true",
-                    "page": page,
-                    "limit": _PAGE_LIMIT,
-                }
-            )
+            params: dict[str, str | int] = {"page": page, "limit": _PAGE_LIMIT}
+            if application:
+                params["application"] = application
+            if is_main_solution is not None:
+                params["is_main_solution"] = "true" if is_main_solution else "false"
+            query = urllib.parse.urlencode(params)
             url = f"{self.base_url}/fixtures/variants/?{query}"
             payload = _get_json(url, self.timeout_s)
             variants, pagination = _parse_variant_list(payload, url)
@@ -188,8 +194,9 @@ class RestFixtureProvider:
         return spec_from_variant(variant, ies_text)
 
     def list_main_variants(self, application: str) -> list[FixtureSpec]:
-        variants = self._fetch_all_main_variants(application)
-        # Server already filtered is_main_solution=true; double-guard client-side.
+        if application not in ("interior", "industrial"):
+            raise ProviderError(f"Unknown application '{application}'.")
+        variants = self._fetch_variants(application=application, is_main_solution=True)
         specs = [self._to_spec(v) for v in variants if v.fixture.is_main_solution]
         if not specs:
             raise ProviderError(
@@ -197,15 +204,28 @@ class RestFixtureProvider:
             )
         return specs
 
-    def get_variants(self, variant_ids: list[str], application: str) -> list[FixtureSpec]:
-        wanted = {str(v).lower() for v in variant_ids}
-        variants = self._fetch_all_main_variants(application)
+    def get_variants(
+        self,
+        variant_ids: list[str],
+        application: str | None = None,
+        *,
+        main_only: bool = True,
+    ) -> list[FixtureSpec]:
+        if main_only and application not in ("interior", "industrial"):
+            raise ProviderError(f"Unknown application '{application}'.")
+        is_main = True if main_only else None
+        variants = self._fetch_variants(application=application if main_only else None, is_main_solution=is_main)
+        if main_only:
+            variants = [v for v in variants if v.fixture.is_main_solution]
         by_id = {str(v.id).lower(): v for v in variants}
         missing = [vid for vid in variant_ids if str(vid).lower() not in by_id]
         if missing:
-            raise ProviderError(
+            msg = (
                 f"Variant(s) not found as main-solution '{application}' variants: {missing}."
+                if main_only
+                else f"Variant(s) not found in catalog: {missing}."
             )
+            raise ProviderError(msg)
         return [self._to_spec(by_id[str(vid).lower()]) for vid in variant_ids]
 
     # Legacy single-fixture lookup kept for internal/dev use (not used by automate).
@@ -225,29 +245,38 @@ class InMemoryFixtureProvider:
     def add(self, spec: FixtureSpec) -> None:
         self._specs[spec.id] = spec
 
-    def _matching(self, application: str) -> list[FixtureSpec]:
-        return [
-            s
-            for s in self._specs.values()
-            if s.is_main_solution and application in s.applications
-        ]
+    def _matching(self, application: str | None = None, main_only: bool = True) -> list[FixtureSpec]:
+        specs = list(self._specs.values())
+        if main_only:
+            specs = [s for s in specs if s.is_main_solution]
+        if application:
+            specs = [s for s in specs if application in s.applications]
+        return specs
 
     def list_main_variants(self, application: str) -> list[FixtureSpec]:
-        specs = self._matching(application)
+        specs = self._matching(application, main_only=True)
         if not specs:
             raise ProviderError(
                 f"No main-solution variants found for application '{application}'."
             )
         return specs
 
-    def get_variants(self, variant_ids: list[str], application: str) -> list[FixtureSpec]:
-        wanted = {str(v).lower() for v in variant_ids}
-        pool = {str(s.id).lower(): s for s in self._matching(application)}
+    def get_variants(
+        self,
+        variant_ids: list[str],
+        application: str | None = None,
+        *,
+        main_only: bool = True,
+    ) -> list[FixtureSpec]:
+        pool = {str(s.id).lower(): s for s in self._matching(application, main_only=main_only)}
         missing = [vid for vid in variant_ids if str(vid).lower() not in pool]
         if missing:
-            raise ProviderError(
+            msg = (
                 f"Variant(s) not found as main-solution '{application}' variants: {missing}."
+                if main_only
+                else f"Variant(s) not found in catalog: {missing}."
             )
+            raise ProviderError(msg)
         ordered = [pool[str(vid).lower()] for vid in variant_ids]
         return ordered
 

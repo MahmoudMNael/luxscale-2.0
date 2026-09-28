@@ -3,138 +3,408 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>LuxScale demo v2</title>
-  <link rel="stylesheet" href="demo.css" />
+  <title>LuxScale 2.0 Studio</title>
+  <link rel="stylesheet" href="demo.css?v=2.3.0" />
 </head>
 <body>
   <header class="top">
     <div>
-      <h1>LuxScale v2</h1>
-      <p class="muted">Illuminance demo — floor plan, fixtures, every returned matrix (full radiosity: walls + floor + ceiling, server-side)</p>
+      <div class="logo-row">
+        <h1>LuxScale 2.0 Studio</h1>
+        <span class="version-tag">Radiosity + Free Placement</span>
+      </div>
+      <p class="muted">EN 12464 Lighting Engine • Custom Grids (Count/Spacing/Axis) • Free Drag-and-Drop Placement • Multi-Variant Studies • Fast Recalculation</p>
     </div>
-    <a class="docs" href="/docs" target="_blank" rel="noreferrer">OpenAPI</a>
+    <div class="top-actions">
+      <a class="docs" href="/docs" target="_blank" rel="noreferrer">OpenAPI Specification</a>
+    </div>
   </header>
 
   <main class="layout">
     <form id="form" class="panel">
-      <h2>Inputs</h2>
+      <h2>Room Geometry</h2>
 
-      <label>Room height (m)
-        <input id="height" type="number" min="0.01" step="0.01" value="4" required />
-        <span class="hint">Room height. Used as the default when ceiling / mounting heights are left empty.</span>
-      </label>
-
-      <label>Ceiling height (m)
-        <input id="ceilingHeight" type="number" min="0.01" step="0.01" placeholder="= room height" />
-        <span class="hint">Ceiling plane. Walls extend to this. Empty = room height.</span>
-      </label>
-
-      <label>Mounting height (m)
-        <input id="mountingHeight" type="number" min="0.01" step="0.01" placeholder="= ceiling height" />
-        <span class="hint">Fixture plane (e.g. pendant drop). Must be ≤ ceiling and above the work plane.</span>
-      </label>
-
-      <label>Work plane height (m)
-        <input id="workPlaneHeight" type="number" min="0" step="0.01" value="0" required />
-        <span class="hint">DIALux calculation-surface height. Use 0 for true floor, 0.75/0.85 to match Dialux working plane.</span>
-      </label>
-
-      <label>Floor / ceiling zone (m)
-        <input id="floorZone" type="number" min="0" step="0.05" value="0.5" required />
-        <span class="hint">Fixed 0.5 m default for floor and ceiling. Set explicitly to compare.</span>
-      </label>
-
-      <label>Wall zone (m)
-        <input id="wallZone" type="number" min="0" step="0.05" placeholder="auto 15% (max 0.5)" />
-        <span class="hint">Empty = auto 15% of min(L,H), capped at 0.5 m. Walls with min(L,H) ≤ 1.0 m are neglected.</span>
-      </label>
-
-      <label>Luminaire rotation (°)
-        <input id="luminaireRotation" type="number" min="0" max="360" step="1" placeholder="0" />
-        <span class="hint">In-room rotation of the housing. Empty = 0 (as placed).</span>
-      </label>
-
-      <fieldset>
-        <legend>Fixture grid X</legend>
-        <label>Spacing <input id="xSpacing" type="number" min="0.01" step="0.01" value="2.42" required /></label>
-        <label>Offset beginning <input id="xOffB" type="number" min="0" step="0.01" value="1.21" required /></label>
-        <label>Offset ending <input id="xOffE" type="number" min="0" step="0.01" value="1" required /></label>
-      </fieldset>
-
-      <fieldset>
-        <legend>Fixture grid Y</legend>
-        <label>Spacing <input id="ySpacing" type="number" min="0.01" step="0.01" value="255" required /></label>
-        <label>Offset beginning <input id="yOffB" type="number" min="0" step="0.01" value="2.62" required /></label>
-        <label>Offset ending <input id="yOffE" type="number" min="0" step="0.01" value="1" required /></label>
-      </fieldset>
-
-      <label>IES file
-        <input id="iesFile" type="file" accept=".ies,.txt,text/plain" />
-        <span class="hint">Leave empty to use <code>sample.ies</code></span>
-      </label>
-
-      <div class="row">
-        <span>Polygon (m)</span>
-        <button type="button" id="presetRect" class="ghost">8×6 rect</button>
-        <button type="button" id="presetL" class="ghost">L-shape</button>
+      <div class="field-grid">
+        <label>Ceiling height (m)
+          <input id="ceilingHeight" type="number" min="0.01" step="0.01" value="3.00" required />
+        </label>
+        <label>Mounting height (m)
+          <input id="mountingHeight" type="number" min="0.01" step="0.01" value="3.00" required />
+        </label>
       </div>
-      <table id="verts">
-        <thead><tr><th>x</th><th>y</th><th></th></tr></thead>
-        <tbody></tbody>
-      </table>
-      <button type="button" id="addVert" class="ghost">Add vertex</button>
-      <canvas id="polyPreview" width="280" height="200" aria-label="Polygon preview"></canvas>
+
+      <div class="field-grid">
+        <label>Work plane (m)
+          <input id="workPlaneHeight" type="number" min="0" step="0.01" value="0.75" required />
+        </label>
+        <label>Floor / ceiling zone (m)
+          <input id="floorZone" type="number" min="0" step="0.05" value="0.5" required />
+        </label>
+      </div>
+
+      <div class="field-grid">
+        <label>Floor / ceiling zone (m)
+          <input id="floorZone" type="number" min="0" step="0.05" value="0.5" required />
+        </label>
+        <label>Wall zone (m)
+          <input id="wallZone" type="number" min="0" step="0.05" placeholder="auto 15% (max 0.5)" />
+        </label>
+      </div>
+
+      <h2>Room Boundary</h2>
+      <div class="row">
+        <button type="button" id="presetRect" class="ghost">8×6 Rect</button>
+        <button type="button" id="presetL" class="ghost">L-Shape</button>
+        <button type="button" id="presetRoom" class="ghost">DIALux Room</button>
+      </div>
+      <div class="table-scroll">
+        <table id="verts">
+          <thead><tr><th>X (m)</th><th>Y (m)</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <button type="button" id="addVert" class="ghost full">+ Add Vertex</button>
+      <canvas id="polyPreview" width="300" height="200" aria-label="Polygon preview"></canvas>
       <p id="polyMeta" class="hint"></p>
 
-      <button type="submit" id="run">Calculate</button>
+      <h2>Fixture Grid &amp; Placement</h2>
+      <div class="tab-group" id="gridModeTabs">
+        <button type="button" class="tab-btn active" data-mode="count">Count</button>
+        <button type="button" class="tab-btn" data-mode="spacing">Spacing</button>
+        <button type="button" class="tab-btn" data-mode="axis">Axis</button>
+        <button type="button" class="tab-btn" data-mode="free">Free Placement</button>
+      </div>
+
+      <!-- Count Grid Mode -->
+      <div id="panelCount" class="mode-panel">
+        <div class="field-grid">
+          <label>Count X (countX)
+            <input id="countX" type="number" min="1" step="1" value="3" required />
+          </label>
+          <label>Count Y (countY)
+            <input id="countY" type="number" min="1" step="1" value="2" required />
+          </label>
+        </div>
+        <label>Offset Fraction (0.0 – 1.0)
+          <input id="offsetFraction" type="number" min="0" max="1" step="0.05" value="0.5" />
+          <span class="hint">0.5 = centered half-spacing to boundary walls (DIALux rule).</span>
+        </label>
+      </div>
+
+      <!-- Spacing Grid Mode -->
+      <div id="panelSpacing" class="mode-panel" hidden>
+        <div class="field-grid">
+          <label>Spacing X (spacingX, m)
+            <input id="spacingX" type="number" min="0.1" step="0.05" value="2.40" />
+          </label>
+          <label>Spacing Y (spacingY, m)
+            <input id="spacingY" type="number" min="0.1" step="0.05" value="2.50" />
+          </label>
+        </div>
+        <label class="checkbox-label">
+          <input id="spacingAutoCenter" type="checkbox" checked /> Auto-center fixtures within bounding box
+        </label>
+        <div class="field-grid" id="spacingOffsetGrid" hidden>
+          <label>Offset X (offsetX, m)
+            <input id="spacingOffsetX" type="number" min="0" step="0.05" placeholder="0" />
+          </label>
+          <label>Offset Y (offsetY, m)
+            <input id="spacingOffsetY" type="number" min="0" step="0.05" placeholder="0" />
+          </label>
+        </div>
+      </div>
+
+      <!-- Axis Grid Mode (Legacy / Dialux offsets) -->
+      <div id="panelAxis" class="mode-panel" hidden>
+        <fieldset>
+          <legend>Fixture Grid X</legend>
+          <label>Spacing <input id="xSpacing" type="number" min="0.01" step="0.01" value="2.42" /></label>
+          <div class="field-grid">
+            <label>Offset Beg <input id="xOffB" type="number" min="0" step="0.01" value="1.21" /></label>
+            <label>Offset End <input id="xOffE" type="number" min="0" step="0.01" value="1.0" /></label>
+          </div>
+        </fieldset>
+        <fieldset>
+          <legend>Fixture Grid Y</legend>
+          <label>Spacing <input id="ySpacing" type="number" min="0.01" step="0.01" value="2.55" /></label>
+          <div class="field-grid">
+            <label>Offset Beg <input id="yOffB" type="number" min="0" step="0.01" value="2.62" /></label>
+            <label>Offset End <input id="yOffE" type="number" min="0" step="0.01" value="1.0" /></label>
+          </div>
+        </fieldset>
+      </div>
+
+      <!-- Free Placement Mode -->
+      <div id="panelFree" class="mode-panel" hidden>
+        <div class="free-header">
+          <span id="freeCountBadge" class="pill-badge">0 fixtures</span>
+          <div class="row">
+            <button type="button" id="btnAddFree" class="ghost sm">+ Add</button>
+            <button type="button" id="btnPopulateFromGrid" class="ghost sm" title="Generate fixtures from current grid">From Grid</button>
+            <button type="button" id="btnClearFree" class="ghost sm danger" title="Clear all free fixtures">Clear</button>
+          </div>
+        </div>
+        <div class="table-scroll max-h-180">
+          <table id="freeFixturesTable">
+            <thead><tr><th>ID</th><th>X</th><th>Y</th><th>Rot°</th><th>Tilt°</th><th></th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <p class="hint">Click or drag fixtures directly on the floor plan canvas to position them freely!</p>
+      </div>
+
+      <label>Default luminaire rotation (°)
+        <input id="luminaireRotation" type="number" min="0" max="360" step="1" placeholder="0" />
+        <span class="hint">In-room rotation of the housing (0–360°).</span>
+      </label>
+
+      <h2>Photometry &amp; Study Set</h2>
+      <div class="tab-group" id="studySourceTabs">
+        <button type="button" class="tab-btn active" data-source="file">Upload IES</button>
+        <button type="button" class="tab-btn" data-source="variants">Variant Study (JSON)</button>
+      </div>
+
+      <div id="panelIesFile">
+        <label>IES Photometry file
+          <input id="iesFile" type="file" accept=".ies,.ldt,.txt,text/plain" />
+          <span class="hint">Leave empty to use bundled <code>sample.ies</code>.</span>
+        </label>
+      </div>
+
+      <div id="panelVariants" hidden>
+        <label>Default Variant ID
+          <input id="variantId" type="text" placeholder="e.g. VAR-REC-01" />
+          <span class="hint">Catalog variant UUID. Default for grid layouts or fixtures without an explicit variant.</span>
+        </label>
+      </div>
+
+      <details class="section-details" open>
+        <summary>Reflectances &amp; Physics</summary>
+        <div class="field-grid">
+          <label>Wall ρ
+            <input id="wallReflectance" type="number" min="0" max="1" step="0.05" value="0.5" />
+          </label>
+          <label>Floor ρ
+            <input id="floorReflectance" type="number" min="0" max="1" step="0.05" value="0.2" />
+          </label>
+          <label>Ceiling ρ
+            <input id="ceilingReflectance" type="number" min="0" max="1" step="0.05" value="0.7" />
+          </label>
+        </div>
+        <div class="field-grid">
+          <label>Maintenance Factor (MF)
+            <input id="maintenanceFactor" type="number" min="0.1" max="1" step="0.05" value="0.8" />
+          </label>
+          <label>Radiosity Bounces
+            <select id="bounces">
+              <option value="0">0 (Direct Only / Fast)</option>
+              <option value="1">1 bounce</option>
+              <option value="2" selected>2 bounces (Standard)</option>
+              <option value="3">3 bounces (High precision)</option>
+            </select>
+          </label>
+        </div>
+        <label class="checkbox-label">
+          <input id="includeMatrices" type="checkbox" checked /> Include detailed wall &amp; ceiling matrices
+        </label>
+      </details>
+
+      <details class="section-details" open>
+        <summary>Compliance Targets (EN 12464)</summary>
+        <div class="row presets-row">
+          <button type="button" class="ghost xs comp-preset" data-lux="500" data-u0="0.6">Office (500 lx)</button>
+          <button type="button" class="ghost xs comp-preset" data-lux="300" data-u0="0.6">Classroom (300 lx)</button>
+          <button type="button" class="ghost xs comp-preset" data-lux="150" data-u0="0.4">Corridor (150 lx)</button>
+        </div>
+        <div class="field-grid">
+          <label>Target Lux (lx)
+            <input id="targetLux" type="number" min="0" step="25" value="500" />
+          </label>
+          <label>Min Uniformity U0
+            <input id="minUniformity" type="number" min="0" max="1" step="0.05" value="0.60" />
+          </label>
+        </div>
+      </details>
+
+      <button type="submit" id="run">Run Calculation</button>
       <p id="status" class="status" hidden></p>
     </form>
 
     <section class="results">
+      <!-- Compliance Banner -->
+      <div id="complianceBanner" class="compliance-banner" hidden>
+        <div class="comp-badge-box">
+          <span id="compBadge" class="badge">EVALUATING</span>
+        </div>
+        <div class="comp-details">
+          <div class="comp-stat">
+            <span class="label">Average Lux</span>
+            <span id="compAvgLux" class="val">—</span>
+            <span id="compTargetLux" class="target">target ≥ 500 lx</span>
+          </div>
+          <div class="comp-stat">
+            <span class="label">Uniformity (U0)</span>
+            <span id="compUniformity" class="val">—</span>
+            <span id="compTargetU0" class="target">target ≥ 0.60</span>
+          </div>
+          <div class="comp-stat">
+            <span class="label">Min / Max Lux</span>
+            <span id="compMinMax" class="val">—</span>
+            <span class="target">floor working plane</span>
+          </div>
+          <div class="comp-stat">
+            <span class="label">Maintenance</span>
+            <span id="compMF" class="val">0.80</span>
+            <span class="target">light loss factor</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Multi-Variant Comparison Shelf -->
+      <div id="variantsShelf" class="variants-shelf" hidden>
+        <div class="shelf-header">
+          <h3>Variant Study Comparison</h3>
+          <span class="hint">Click any variant card to switch the visualizer</span>
+        </div>
+        <div id="variantsList" class="variants-grid"></div>
+      </div>
+
+      <!-- Plan Interactive Toolbar -->
       <div class="toolbar">
         <label>Floor layer
           <select id="floorLayer" disabled></select>
         </label>
         <label>Wall margin (m)
           <input id="wallMargin" type="number" min="0" step="0.05" value="0" />
-          <span class="hint">Extra client-side filter only. Server points are already EN 12464 cell centres after the wall zone above.</span>
         </label>
-        <div id="stats" class="stats muted">No run yet</div>
+
+        <!-- Canvas Interaction Controls -->
+        <div class="canvas-tools">
+          <button type="button" id="btnUnlockGrid" class="btn-unlock" title="Unlock calculated grid into freely draggable fixtures">
+            🔓 Unlock Grid &rarr; Free Mode
+          </button>
+          <div class="btn-group">
+            <button type="button" id="toolSelect" class="tool-btn active" title="Select &amp; Drag Fixtures">👆 Move</button>
+            <button type="button" id="toolAdd" class="tool-btn" title="Click on room floor to add a new fixture">➕ Add</button>
+          </div>
+          <label class="snap-label">Snap:
+            <select id="snapSelect">
+              <option value="0">Off</option>
+              <option value="0.1" selected>0.1 m</option>
+              <option value="0.25">0.25 m</option>
+              <option value="0.5">0.5 m</option>
+              <option value="1.0">1.0 m</option>
+            </select>
+          </label>
+          <button type="button" id="btnRecalc" class="btn-recalc" title="Recalculate lighting with current fixture positions">
+            ⚡ Recalculate
+          </button>
+        </div>
+
+        <div id="stats" class="stats muted">No calculation run yet</div>
       </div>
+
+      <!-- Dialux Comparison Probes -->
       <div class="toolbar compare">
         <fieldset>
-          <legend>Dialux min XY</legend>
+          <legend>DIALux Min XY</legend>
           <div class="row">
             <input id="dxMinX" type="number" step="0.01" placeholder="x" />
             <input id="dxMinY" type="number" step="0.01" placeholder="y" />
           </div>
         </fieldset>
         <fieldset>
-          <legend>Dialux max XY</legend>
+          <legend>DIALux Max XY</legend>
           <div class="row">
             <input id="dxMaxX" type="number" step="0.01" placeholder="x" />
             <input id="dxMaxY" type="number" step="0.01" placeholder="y" />
           </div>
         </fieldset>
-        <p id="dialuxNearest" class="hint">Enter Dialux min/max coordinates to compare lux at the nearest patch (no re-run).</p>
+        <p id="dialuxNearest" class="hint">Enter DIALux min/max coordinates to compare lux at the nearest patch (no re-run).</p>
       </div>
-      <div class="view">
-        <canvas id="plan" width="720" height="520"></canvas>
-        <aside class="legend">
-          <div id="legendBar"></div>
-          <div class="legend-ends"><span id="legMin">0</span><span>lux</span><span id="legMax">0</span></div>
-          <p class="hint">Squares = EN 12464 floor points at the wall zone above. Rings = min / max of kept samples. Amber = luminous opening. Wall margin extra-filters those points without re-running. For Dialux parity use Dialux standard grid (EN 12464), not adaptive.</p>
+
+      <!-- Main Plan View + Inspector Dock -->
+      <div class="view-container">
+        <div class="canvas-wrapper">
+          <canvas id="plan" width="760" height="540"></canvas>
+          <div id="canvasOverlayNotice" class="canvas-notice" hidden>
+            <span>Free Placement Mode Active — Drag fixtures or click to place</span>
+          </div>
+        </div>
+
+        <aside class="sidebar-dock">
+          <!-- Heatmap Legend -->
+          <div class="legend-card">
+            <h4>Illuminance</h4>
+            <div class="legend">
+              <div id="legendBar"></div>
+              <div class="legend-ends">
+                <span id="legMax">0 lx</span>
+                <span class="mid-label">Floor (lx)</span>
+                <span id="legMin">0 lx</span>
+              </div>
+            </div>
+            <p class="legend-caption">Squares = EN 12464 cell centres. Blue ring = Min, Yellow ring = Max. Gold = luminous opening. Arrows indicate tilt &amp; aim direction.</p>
+          </div>
+
+          <!-- Fixture Inspector Panel -->
+          <div id="inspectorPanel" class="inspector-card">
+            <div class="inspector-header">
+              <h4 id="inspTitle">Fixture Inspector</h4>
+              <span id="inspBadge" class="pill-badge">—</span>
+            </div>
+            <div id="inspEmpty" class="insp-empty">
+              <p>Select any fixture on the plan canvas or in the list to inspect &amp; edit position, rotation, and tilt.</p>
+            </div>
+            <div id="inspControls" class="insp-form" hidden>
+              <div class="field-grid">
+                <label>X (m)
+                  <input id="inspX" type="number" step="0.05" />
+                </label>
+                <label>Y (m)
+                  <input id="inspY" type="number" step="0.05" />
+                </label>
+              </div>
+              <label>Mounting Z (m override)
+                <input id="inspZ" type="number" step="0.05" placeholder="= room mounting height" />
+              </label>
+              <label>Rotation: <span id="inspRotVal">0°</span>
+                <input id="inspRot" type="range" min="0" max="360" step="5" value="0" />
+              </label>
+              <label>Tilt Angle: <span id="inspTiltVal">0°</span>
+                <input id="inspTilt" type="range" min="0" max="90" step="5" value="0" />
+                <span class="hint">0° = nadir (downward). &gt;0° tilts fixture for wall-washing or accent.</span>
+              </label>
+              <div class="field-grid">
+                <label>Variant ID
+                  <input id="inspVariantId" type="text" placeholder="e.g. VAR-REC-01" />
+                </label>
+                <label>IES Ref / Filename
+                  <input id="inspIesRef" type="text" placeholder="e.g. accent.ies" />
+                </label>
+              </div>
+              <div class="aim-readout">
+                <span class="aim-label">Aim Vector:</span>
+                <span id="inspAimVector" class="aim-val">(0.00, 0.00, -1.00)</span>
+              </div>
+              <div class="row insp-actions">
+                <button type="button" id="btnInspDup" class="ghost sm" title="Duplicate this fixture">Duplicate</button>
+                <button type="button" id="btnInspDel" class="ghost sm danger" title="Delete this fixture">Delete</button>
+                <button type="button" id="btnInspRecalc" class="primary sm" title="Recalculate now">Recalculate</button>
+              </div>
+            </div>
+          </div>
         </aside>
       </div>
 
-      <h2>Walls, floor &amp; ceiling</h2>
+      <h2>Walls, Floor &amp; Ceiling Direct Illuminance</h2>
       <p class="hint">Wall cards show summed direct illuminance per wall (unrolled elevation). Floor / ceiling cards show summed direct illuminance in plan view.</p>
       <div id="walls" class="walls"></div>
 
-      <h2>Matrices</h2>
+      <h2>Matrices &amp; Placed Fixtures</h2>
       <div id="matrices"></div>
     </section>
   </main>
-  <script src="demo.js"></script>
+  <script src="demo.js?v=2.3.0"></script>
 </body>
 </html>
