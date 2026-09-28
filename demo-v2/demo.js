@@ -42,14 +42,87 @@ const els = {
   legMax: document.getElementById("legMax"),
   wallMargin: document.getElementById("wallMargin"),
   dialuxNearest: document.getElementById("dialuxNearest"),
+  // Grid mode panels
+  gridTabs: document.getElementById("gridModeTabs"),
+  panelCount: document.getElementById("panelCount"),
+  panelSpacing: document.getElementById("panelSpacing"),
+  panelAxis: document.getElementById("panelAxis"),
+  panelFree: document.getElementById("panelFree"),
+  freeFixturesTable: document.querySelector("#freeFixturesTable tbody"),
+  freeCountBadge: document.getElementById("freeCountBadge"),
+  btnAddFree: document.getElementById("btnAddFree"),
+  btnPopulateFromGrid: document.getElementById("btnPopulateFromGrid"),
+  btnClearFree: document.getElementById("btnClearFree"),
+  // Canvas Tools
+  btnUnlockGrid: document.getElementById("btnUnlockGrid"),
+  toolSelect: document.getElementById("toolSelect"),
+  toolAdd: document.getElementById("toolAdd"),
+  snapSelect: document.getElementById("snapSelect"),
+  btnRecalc: document.getElementById("btnRecalc"),
+  canvasNotice: document.getElementById("canvasOverlayNotice"),
+  // Inspector
+  inspectorPanel: document.getElementById("inspectorPanel"),
+  inspEmpty: document.getElementById("inspEmpty"),
+  inspControls: document.getElementById("inspControls"),
+  inspTitle: document.getElementById("inspTitle"),
+  inspBadge: document.getElementById("inspBadge"),
+  inspX: document.getElementById("inspX"),
+  inspY: document.getElementById("inspY"),
+  inspZ: document.getElementById("inspZ"),
+  inspRot: document.getElementById("inspRot"),
+  inspRotVal: document.getElementById("inspRotVal"),
+  inspTilt: document.getElementById("inspTilt"),
+  inspTiltVal: document.getElementById("inspTiltVal"),
+  inspVariantId: document.getElementById("inspVariantId"),
+  inspIesRef: document.getElementById("inspIesRef"),
+  inspAimVector: document.getElementById("inspAimVector"),
+  btnInspDup: document.getElementById("btnInspDup"),
+  btnInspDel: document.getElementById("btnInspDel"),
+  btnInspRecalc: document.getElementById("btnInspRecalc"),
+  // Study Source & Variants
+  studyTabs: document.getElementById("studySourceTabs"),
+  panelIesFile: document.getElementById("panelIesFile"),
+  panelVariants: document.getElementById("panelVariants"),
+  variantsShelf: document.getElementById("variantsShelf"),
+  variantsList: document.getElementById("variantsList"),
+  // Compliance
+  complianceBanner: document.getElementById("complianceBanner"),
+  compBadge: document.getElementById("compBadge"),
+  compAvgLux: document.getElementById("compAvgLux"),
+  compTargetLux: document.getElementById("compTargetLux"),
+  compUniformity: document.getElementById("compUniformity"),
+  compTargetU0: document.getElementById("compTargetU0"),
+  compMinMax: document.getElementById("compMinMax"),
+  compMF: document.getElementById("compMF"),
 };
 
 let vertices = PRESETS.room.map(([x, y]) => ({ x, y }));
 let result = null;
+let multiVariantResults = null;
+let activeVariantIndex = 0;
 let layers = [];
 
+// Interactive Placement State
+let gridMode = "count"; // 'count' | 'spacing' | 'axis' | 'free'
+let studySource = "file"; // 'file' | 'variants'
+let freeFixtures = []; // [{ id, x, y, z, rotation, tiltAngle }]
+let selectedFixtureIndex = -1;
+let activeTool = "select"; // 'select' | 'add'
+let isDragging = false;
+let dragOffset = { dx: 0, dy: 0 };
+let lastPlanMapper = null;
+let lastPlanBounds = null;
+
 function num(id) {
-  return Number(document.getElementById(id).value);
+  const el = document.getElementById(id);
+  return el ? Number(el.value) : 0;
+}
+
+function optNum(id) {
+  const el = document.getElementById(id);
+  if (!el || el.value === "" || el.value == null) return null;
+  const v = Number(el.value);
+  return Number.isFinite(v) ? v : null;
 }
 
 function signedArea(pts) {
@@ -143,7 +216,7 @@ function nearestPatch(pt, patches) {
 }
 
 function fmtXY(p) {
-  return `(${p.x.toFixed(2)}, ${p.y.toFixed(2)})`;
+  return p ? `(${p.x.toFixed(2)}, ${p.y.toFixed(2)})` : "(—, —)";
 }
 
 function onSegment(p, a, b) {
@@ -182,24 +255,112 @@ function axisPoints(lo, hi, spacing, offsetBeginning, offsetEnding) {
   return points;
 }
 
+// Preview math supporting Count, Spacing, Axis, and Free modes
 function previewFixtures(pts) {
+  if (gridMode === "free") {
+    return freeFixtures.map((f) => ({
+      id: f.id,
+      x: f.x,
+      y: f.y,
+      z: f.z,
+      rotation: f.rotation,
+      tiltAngle: f.tiltAngle,
+    }));
+  }
+
   const xs = pts.map((p) => p.x);
   const ys = pts.map((p) => p.y);
   const xmin = Math.min(...xs);
   const xmax = Math.max(...xs);
   const ymin = Math.min(...ys);
   const ymax = Math.max(...ys);
-  const gx = { spacing: num("xSpacing"), offB: num("xOffB"), offE: num("xOffE") };
-  const gy = { spacing: num("ySpacing"), offB: num("yOffB"), offE: num("yOffE") };
   const fixtures = [];
   let n = 1;
-  for (const y of axisPoints(ymin, ymax, gy.spacing, gy.offB, gy.offE)) {
-    for (const x of axisPoints(xmin, xmax, gx.spacing, gx.offB, gx.offE)) {
-      if (!pointInPolygon({ x, y }, pts)) continue;
-      fixtures.push({ id: `F${n}`, x, y });
-      n += 1;
+  const defaultRot = num("luminaireRotation") || 0;
+
+  if (gridMode === "count") {
+    const elX = document.getElementById("countX") || document.getElementById("countNx");
+    const elY = document.getElementById("countY") || document.getElementById("countNy");
+    const nx = Math.max(1, parseInt(elX ? elX.value : "1", 10) || 1);
+    const ny = Math.max(1, parseInt(elY ? elY.value : "1", 10) || 1);
+    const frac = optNum("offsetFraction") != null ? Number(document.getElementById("offsetFraction").value) : 0.5;
+    const wx = Math.max(0.01, xmax - xmin);
+    const wy = Math.max(0.01, ymax - ymin);
+
+    let xPts = [];
+    if (nx === 1) {
+      xPts = [xmin + wx / 2];
+    } else {
+      const denomX = nx - 1 + 2 * frac;
+      const sx = denomX > EPS ? wx / denomX : wx;
+      const offX = sx * frac;
+      for (let i = 0; i < nx; i++) xPts.push(xmin + offX + i * sx);
+    }
+
+    let yPts = [];
+    if (ny === 1) {
+      yPts = [ymin + wy / 2];
+    } else {
+      const denomY = ny - 1 + 2 * frac;
+      const sy = denomY > EPS ? wy / denomY : wy;
+      const offY = sy * frac;
+      for (let j = 0; j < ny; j++) yPts.push(ymin + offY + j * sy);
+    }
+
+    for (const y of yPts) {
+      for (const x of xPts) {
+        if (!pointInPolygon({ x, y }, pts)) continue;
+        fixtures.push({ id: `F${n}`, x, y, rotation: defaultRot, tiltAngle: 0 });
+        n += 1;
+      }
+    }
+  } else if (gridMode === "spacing") {
+    const sx = Math.max(0.1, num("spacingX"));
+    const sy = Math.max(0.1, num("spacingY"));
+    const autoCenter = document.getElementById("spacingAutoCenter").checked;
+    const wx = Math.max(0.01, xmax - xmin);
+    const wy = Math.max(0.01, ymax - ymin);
+
+    if (autoCenter) {
+      const nx = Math.max(1, Math.round(wx / sx));
+      const ny = Math.max(1, Math.round(wy / sy));
+      const offX = (wx - (nx - 1) * sx) / 2;
+      const offY = (wy - (ny - 1) * sy) / 2;
+      const xPts = [];
+      const yPts = [];
+      for (let i = 0; i < nx; i++) xPts.push(xmin + offX + i * sx);
+      for (let j = 0; j < ny; j++) yPts.push(ymin + offY + j * sy);
+      for (const y of yPts) {
+        for (const x of xPts) {
+          if (!pointInPolygon({ x, y }, pts)) continue;
+          fixtures.push({ id: `F${n}`, x, y, rotation: defaultRot, tiltAngle: 0 });
+          n += 1;
+        }
+      }
+    } else {
+      const ox = optNum("spacingOffsetX") || 0;
+      const oy = optNum("spacingOffsetY") || 0;
+      for (let y = ymin + oy; y <= ymax - oy + EPS; y += sy) {
+        for (let x = xmin + ox; x <= xmax - ox + EPS; x += sx) {
+          if (!pointInPolygon({ x, y }, pts)) continue;
+          fixtures.push({ id: `F${n}`, x, y, rotation: defaultRot, tiltAngle: 0 });
+          n += 1;
+        }
+      }
+    }
+  } else {
+    // Axis mode
+    const gx = { spacing: num("xSpacing"), offB: num("xOffB"), offE: num("xOffE") };
+    const gy = { spacing: num("ySpacing"), offB: num("yOffB"), offE: num("yOffE") };
+    for (const y of axisPoints(ymin, ymax, gy.spacing, gy.offB, gy.offE)) {
+      for (const x of axisPoints(xmin, xmax, gx.spacing, gx.offB, gx.offE)) {
+        if (!pointInPolygon({ x, y }, pts)) continue;
+        fixtures.push({ id: `F${n}`, x, y, rotation: defaultRot, tiltAngle: 0 });
+        n += 1;
+      }
     }
   }
+
   return fixtures;
 }
 
@@ -217,13 +378,13 @@ function drawPolygonPreview() {
   const to = mapper(canvas, b);
   const area = Math.abs(signedArea(pts));
 
-  ctx.strokeStyle = "#2c3344";
+  ctx.strokeStyle = "#2b3345";
   ctx.lineWidth = 1;
   const origin = to(b.xmin, b.ymin);
   const far = to(b.xmax, b.ymax);
   ctx.strokeRect(origin.x, far.y, far.x - origin.x, origin.y - far.y);
 
-  ctx.fillStyle = "rgba(61, 139, 253, 0.18)";
+  ctx.fillStyle = "rgba(61, 139, 253, 0.15)";
   ctx.strokeStyle = "#3d8bfd";
   ctx.lineWidth = 2;
   ctx.beginPath();
@@ -243,26 +404,26 @@ function drawPolygonPreview() {
     ctx.arc(p.x, p.y, 3, 0, Math.PI * 2);
     ctx.fill();
     ctx.fillStyle = "#e8edf7";
-    ctx.font = "11px sans-serif";
-    ctx.fillText(String(i + 1), p.x + 6, p.y - 6);
+    ctx.font = "10px sans-serif";
+    ctx.fillText(String(i + 1), p.x + 5, p.y - 5);
   });
 
   fixtures.forEach((f) => {
     const p = to(f.x, f.y);
     ctx.fillStyle = "#e0a106";
     ctx.beginPath();
-    ctx.moveTo(p.x, p.y - 5);
-    ctx.lineTo(p.x + 5, p.y);
-    ctx.lineTo(p.x, p.y + 5);
-    ctx.lineTo(p.x - 5, p.y);
+    ctx.moveTo(p.x, p.y - 4);
+    ctx.lineTo(p.x + 4, p.y);
+    ctx.lineTo(p.x, p.y + 4);
+    ctx.lineTo(p.x - 4, p.y);
     ctx.closePath();
     ctx.fill();
     ctx.fillStyle = "#fff7cc";
-    ctx.font = "10px sans-serif";
-    ctx.fillText(f.id, p.x + 6, p.y + 3);
+    ctx.font = "9px sans-serif";
+    ctx.fillText(f.id, p.x + 5, p.y + 3);
   });
 
-  els.polyMeta.textContent = `${pts.length} verts · ${fixtures.length} fixtures · bbox ${b.w.toFixed(2)}×${b.h.toFixed(2)} m · area ≈ ${area.toFixed(2)} m²`;
+  els.polyMeta.textContent = `${pts.length} verts · ${fixtures.length} fixtures (${gridMode}) · bbox ${b.w.toFixed(2)}×${b.h.toFixed(2)} m · area ≈ ${area.toFixed(2)} m²`;
 }
 
 function renderVerts() {
@@ -276,6 +437,7 @@ function renderVerts() {
     )
     .join("");
   drawPolygonPreview();
+  if (result) renderAll();
 }
 
 els.verts.addEventListener("input", (ev) => {
@@ -292,7 +454,7 @@ els.verts.addEventListener("click", (ev) => {
 });
 document.getElementById("addVert").onclick = () => {
   const last = vertices[vertices.length - 1];
-  vertices.push({ x: last.x + 1, y: last.y });
+  vertices.push({ x: Number((last.x + 1).toFixed(2)), y: last.y });
   renderVerts();
 };
 document.getElementById("presetRect").onclick = () => {
@@ -303,27 +465,328 @@ document.getElementById("presetL").onclick = () => {
   vertices = PRESETS.l.map(([x, y]) => ({ x, y }));
   renderVerts();
 };
+document.getElementById("presetRoom").onclick = () => {
+  vertices = PRESETS.room.map(([x, y]) => ({ x, y }));
+  renderVerts();
+};
+
 els.form.addEventListener("input", (ev) => {
   if (ev.target.closest("#verts")) return;
-  if (ev.target.type === "number") drawPolygonPreview();
+  if (ev.target.type === "number" || ev.target.type === "checkbox") {
+    drawPolygonPreview();
+  }
 });
 
-function luxColor(t) {
-  const stops = [
-    [13 / 255, 28 / 255, 51 / 255],
-    [31 / 255, 111 / 255, 235 / 255],
-    [240 / 255, 162 / 255, 2 / 255],
-    [1, 247 / 255, 204 / 255],
-  ];
-  const x = Math.max(0, Math.min(1, t)) * (stops.length - 1);
-  const i = Math.min(Math.floor(x), stops.length - 2);
-  const f = x - i;
-  const a = stops[i];
-  const b = stops[i + 1];
-  const c = a.map((v, k) => v + (b[k] - v) * f);
-  return `rgb(${c.map((v) => Math.round(v * 255)).join(",")})`;
+// Grid Mode Switching
+function setGridMode(mode) {
+  gridMode = mode;
+  document.querySelectorAll("#gridModeTabs .tab-btn").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.mode === mode);
+  });
+  els.panelCount.hidden = mode !== "count";
+  els.panelSpacing.hidden = mode !== "spacing";
+  els.panelAxis.hidden = mode !== "axis";
+  els.panelFree.hidden = mode !== "free";
+  els.canvasNotice.hidden = mode !== "free";
+
+  if (mode === "free" && freeFixtures.length === 0) {
+    populateFreeFromPreview();
+  }
+  drawPolygonPreview();
+  if (result) renderAll();
 }
 
+document.querySelectorAll("#gridModeTabs .tab-btn").forEach((btn) => {
+  btn.addEventListener("click", () => setGridMode(btn.dataset.mode));
+});
+
+const spacingAutoCenterEl = document.getElementById("spacingAutoCenter");
+if (spacingAutoCenterEl) {
+  spacingAutoCenterEl.addEventListener("change", (ev) => {
+    const offsetGrid = document.getElementById("spacingOffsetGrid");
+    if (offsetGrid) offsetGrid.hidden = ev.target.checked;
+    drawPolygonPreview();
+  });
+}
+
+// Study Source Switching (Upload IES vs Multi-Variant JSON)
+function setStudySource(src) {
+  studySource = src;
+  document.querySelectorAll("#studySourceTabs .tab-btn").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.source === src);
+  });
+  els.panelIesFile.hidden = src !== "file";
+  els.panelVariants.hidden = src !== "variants";
+}
+
+document.querySelectorAll("#studySourceTabs .tab-btn").forEach((btn) => {
+  btn.addEventListener("click", () => setStudySource(btn.dataset.source));
+});
+
+// Compliance Target Presets
+document.querySelectorAll(".comp-preset").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    document.getElementById("targetLux").value = btn.dataset.lux;
+    document.getElementById("minUniformity").value = btn.dataset.u0;
+    if (result) renderAll();
+  });
+});
+
+// Free Placement Helpers
+function populateFreeFromPreview() {
+  let pts = [];
+  if (result && result.fixtures && result.fixtures.length > 0) {
+    pts = result.fixtures.map((f, i) => ({
+      id: f.id || `F${i + 1}`,
+      x: Number(f.position.x.toFixed(3)),
+      y: Number(f.position.y.toFixed(3)),
+      z: f.position.z != null ? Number(f.position.z.toFixed(3)) : null,
+      rotation: f.rotation || 0,
+      tiltAngle: f.tiltAngle || 0,
+    }));
+  } else {
+    pts = previewFixtures(vertices).map((f, i) => ({
+      id: f.id || `F${i + 1}`,
+      x: Number(f.x.toFixed(3)),
+      y: Number(f.y.toFixed(3)),
+      z: null,
+      rotation: num("luminaireRotation") || 0,
+      tiltAngle: 0,
+    }));
+  }
+  freeFixtures = pts;
+  selectedFixtureIndex = freeFixtures.length > 0 ? 0 : -1;
+  renderFreeFixturesList();
+  updateInspector();
+  drawPolygonPreview();
+  if (result) renderAll();
+}
+
+function unlockGridToFree() {
+  populateFreeFromPreview();
+  setGridMode("free");
+  showStatus("Grid unlocked! Fixtures are now free and draggable on the floor plan.", "ok");
+}
+
+els.btnUnlockGrid.addEventListener("click", unlockGridToFree);
+els.btnPopulateFromGrid.addEventListener("click", populateFreeFromPreview);
+els.btnClearFree.addEventListener("click", () => {
+  freeFixtures = [];
+  selectedFixtureIndex = -1;
+  renderFreeFixturesList();
+  updateInspector();
+  drawPolygonPreview();
+  if (result) renderAll();
+});
+
+els.btnAddFree.addEventListener("click", () => {
+  const b = boundsOf(vertices);
+  const cx = Number(((b.xmin + b.xmax) / 2).toFixed(2));
+  const cy = Number(((b.ymin + b.ymax) / 2).toFixed(2));
+  addFreeFixture(cx, cy);
+});
+
+function addFreeFixture(x, y) {
+  const id = `F${freeFixtures.length + 1}`;
+  const defaultVar = (document.getElementById("variantId") || {}).value?.trim() || undefined;
+  freeFixtures.push({
+    id,
+    x: Number(x.toFixed(3)),
+    y: Number(y.toFixed(3)),
+    z: null,
+    rotation: num("luminaireRotation") || 0,
+    tiltAngle: 0,
+    variantId: defaultVar,
+  });
+  selectedFixtureIndex = freeFixtures.length - 1;
+  renderFreeFixturesList();
+  updateInspector();
+  drawPolygonPreview();
+  if (result) renderAll();
+}
+
+function renderFreeFixturesList() {
+  els.freeCountBadge.textContent = `${freeFixtures.length} fixture${freeFixtures.length === 1 ? "" : "s"}`;
+  els.freeFixturesTable.innerHTML = freeFixtures
+    .map(
+      (f, i) => `<tr class="${i === selectedFixtureIndex ? "active-row" : ""}" data-idx="${i}">
+        <td><strong>${f.id}</strong></td>
+        <td><input type="number" step="0.05" class="ff-x" data-idx="${i}" value="${f.x}" /></td>
+        <td><input type="number" step="0.05" class="ff-y" data-idx="${i}" value="${f.y}" /></td>
+        <td><input type="number" step="5" min="0" max="360" class="ff-rot" data-idx="${i}" value="${f.rotation || 0}" /></td>
+        <td><input type="number" step="5" min="0" max="90" class="ff-tilt" data-idx="${i}" value="${f.tiltAngle || 0}" /></td>
+        <td><button type="button" class="ghost del-ff" data-idx="${i}">×</button></td>
+      </tr>`
+    )
+    .join("");
+}
+
+els.freeFixturesTable.addEventListener("click", (ev) => {
+  const tr = ev.target.closest("tr");
+  if (!tr) return;
+  const idx = Number(tr.dataset.idx);
+  if (ev.target.classList.contains("del-ff")) {
+    freeFixtures.splice(idx, 1);
+    if (selectedFixtureIndex >= freeFixtures.length) selectedFixtureIndex = freeFixtures.length - 1;
+    renderFreeFixturesList();
+    updateInspector();
+    drawPolygonPreview();
+    if (result) renderAll();
+    return;
+  }
+  selectedFixtureIndex = idx;
+  renderFreeFixturesList();
+  updateInspector();
+  if (result) renderAll();
+});
+
+els.freeFixturesTable.addEventListener("input", (ev) => {
+  const el = ev.target;
+  const idx = Number(el.dataset.idx);
+  if (Number.isNaN(idx) || !freeFixtures[idx]) return;
+  if (el.classList.contains("ff-x")) freeFixtures[idx].x = Number(el.value);
+  if (el.classList.contains("ff-y")) freeFixtures[idx].y = Number(el.value);
+  if (el.classList.contains("ff-rot")) freeFixtures[idx].rotation = Number(el.value);
+  if (el.classList.contains("ff-tilt")) freeFixtures[idx].tiltAngle = Number(el.value);
+  updateInspector();
+  drawPolygonPreview();
+  if (result) renderAll();
+});
+
+// Fixture Inspector
+function updateInspector() {
+  if (selectedFixtureIndex < 0 || selectedFixtureIndex >= freeFixtures.length) {
+    els.inspEmpty.hidden = false;
+    els.inspControls.hidden = true;
+    els.inspTitle.textContent = "Fixture Inspector";
+    els.inspBadge.textContent = "—";
+    return;
+  }
+  const f = freeFixtures[selectedFixtureIndex];
+  els.inspEmpty.hidden = true;
+  els.inspControls.hidden = false;
+  els.inspTitle.textContent = `Fixture ${f.id}`;
+  els.inspBadge.textContent = `#${selectedFixtureIndex + 1}`;
+  els.inspX.value = f.x;
+  els.inspY.value = f.y;
+  els.inspZ.value = f.z != null ? f.z : "";
+  els.inspRot.value = f.rotation || 0;
+  els.inspRotVal.textContent = `${f.rotation || 0}°`;
+  els.inspTilt.value = f.tiltAngle || 0;
+  els.inspTiltVal.textContent = `${f.tiltAngle || 0}°`;
+  if (els.inspVariantId) els.inspVariantId.value = f.variantId || "";
+  if (els.inspIesRef) els.inspIesRef.value = f.iesRef || "";
+
+  // Compute aim vector:
+  const rotRad = ((f.rotation || 0) * Math.PI) / 180;
+  const tiltRad = ((f.tiltAngle || 0) * Math.PI) / 180;
+  const aimX = Math.sin(tiltRad) * Math.cos(rotRad);
+  const aimY = Math.sin(tiltRad) * Math.sin(rotRad);
+  const aimZ = -Math.cos(tiltRad);
+  els.inspAimVector.textContent = `(${aimX.toFixed(2)}, ${aimY.toFixed(2)}, ${aimZ.toFixed(2)})`;
+}
+
+els.inspX.addEventListener("input", (ev) => {
+  if (selectedFixtureIndex < 0) return;
+  freeFixtures[selectedFixtureIndex].x = Number(ev.target.value);
+  renderFreeFixturesList();
+  drawPolygonPreview();
+  if (result) renderAll();
+});
+els.inspY.addEventListener("input", (ev) => {
+  if (selectedFixtureIndex < 0) return;
+  freeFixtures[selectedFixtureIndex].y = Number(ev.target.value);
+  renderFreeFixturesList();
+  drawPolygonPreview();
+  if (result) renderAll();
+});
+els.inspZ.addEventListener("input", (ev) => {
+  if (selectedFixtureIndex < 0) return;
+  const v = ev.target.value;
+  freeFixtures[selectedFixtureIndex].z = v !== "" ? Number(v) : null;
+  if (result) renderAll();
+});
+els.inspRot.addEventListener("input", (ev) => {
+  if (selectedFixtureIndex < 0) return;
+  const r = Number(ev.target.value);
+  freeFixtures[selectedFixtureIndex].rotation = r;
+  els.inspRotVal.textContent = `${r}°`;
+  updateInspector();
+  renderFreeFixturesList();
+  drawPolygonPreview();
+  if (result) renderAll();
+});
+els.inspTilt.addEventListener("input", (ev) => {
+  if (selectedFixtureIndex < 0) return;
+  const t = Number(ev.target.value);
+  freeFixtures[selectedFixtureIndex].tiltAngle = t;
+  els.inspTiltVal.textContent = `${t}°`;
+  updateInspector();
+  renderFreeFixturesList();
+  drawPolygonPreview();
+  if (result) renderAll();
+});
+if (els.inspVariantId) {
+  els.inspVariantId.addEventListener("input", (ev) => {
+    if (selectedFixtureIndex < 0) return;
+    freeFixtures[selectedFixtureIndex].variantId = ev.target.value.trim() || undefined;
+  });
+}
+if (els.inspIesRef) {
+  els.inspIesRef.addEventListener("input", (ev) => {
+    if (selectedFixtureIndex < 0) return;
+    freeFixtures[selectedFixtureIndex].iesRef = ev.target.value.trim() || undefined;
+  });
+}
+els.btnInspDup.addEventListener("click", () => {
+  if (selectedFixtureIndex < 0) return;
+  const cur = freeFixtures[selectedFixtureIndex];
+  const id = `F${freeFixtures.length + 1}`;
+  freeFixtures.push({
+    id,
+    x: Number((cur.x + 0.3).toFixed(3)),
+    y: Number((cur.y + 0.3).toFixed(3)),
+    z: cur.z,
+    rotation: cur.rotation,
+    tiltAngle: cur.tiltAngle,
+    variantId: cur.variantId,
+    iesRef: cur.iesRef,
+  });
+  selectedFixtureIndex = freeFixtures.length - 1;
+  renderFreeFixturesList();
+  updateInspector();
+  drawPolygonPreview();
+  if (result) renderAll();
+});
+els.btnInspDel.addEventListener("click", () => {
+  if (selectedFixtureIndex < 0) return;
+  freeFixtures.splice(selectedFixtureIndex, 1);
+  selectedFixtureIndex = freeFixtures.length > 0 ? Math.min(selectedFixtureIndex, freeFixtures.length - 1) : -1;
+  renderFreeFixturesList();
+  updateInspector();
+  drawPolygonPreview();
+  if (result) renderAll();
+});
+
+// Canvas Interaction Tools (Move, Add, Snap)
+els.toolSelect.addEventListener("click", () => {
+  activeTool = "select";
+  els.toolSelect.classList.add("active");
+  els.toolAdd.classList.remove("active");
+  els.plan.style.cursor = "default";
+});
+els.toolAdd.addEventListener("click", () => {
+  activeTool = "add";
+  els.toolAdd.classList.add("active");
+  els.toolSelect.classList.remove("active");
+  els.plan.style.cursor = "crosshair";
+});
+
+function getSnap() {
+  return Number(els.snapSelect.value) || 0;
+}
+
+// Coordinate mapping
 function boundsOf(points) {
   const xs = points.map((p) => p.x);
   const ys = points.map((p) => p.y);
@@ -344,6 +807,31 @@ function mapper(canvas, b) {
   });
 }
 
+function unmapper(canvas, b) {
+  const pad = 36;
+  const s = Math.min((canvas.width - 2 * pad) / b.w, (canvas.height - 2 * pad) / b.h);
+  return (px, py) => ({
+    x: b.xmin + (px - pad) / s,
+    y: b.ymin + (canvas.height - pad - py) / s,
+  });
+}
+
+function luxColor(t) {
+  const stops = [
+    [13 / 255, 28 / 255, 51 / 255],
+    [31 / 255, 111 / 255, 235 / 255],
+    [240 / 255, 162 / 255, 2 / 255],
+    [1, 247 / 255, 204 / 255],
+  ];
+  const x = Math.max(0, Math.min(1, t)) * (stops.length - 1);
+  const i = Math.min(Math.floor(x), stops.length - 2);
+  const f = x - i;
+  const a = stops[i];
+  const b = stops[i + 1];
+  const c = a.map((v, k) => v + (b[k] - v) * f);
+  return `rgb(${c.map((v) => Math.round(v * 255)).join(",")})`;
+}
+
 function stats(values) {
   if (!values.length) return { min: 0, max: 0, avg: 0 };
   const min = Math.min(...values);
@@ -352,33 +840,163 @@ function stats(values) {
   return { min, max, avg };
 }
 
+// Mouse events on Plan Canvas for dragging, selection & adding
+function getCanvasMousePos(canvas, ev) {
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+  return {
+    px: (ev.clientX - rect.left) * scaleX,
+    py: (ev.clientY - rect.top) * scaleY,
+  };
+}
+
+function getActiveFixtures() {
+  if (gridMode === "free") return freeFixtures;
+  if (result && result.fixtures && result.fixtures.length > 0) {
+    return result.fixtures.map((f) => ({
+      id: f.id,
+      x: f.position.x,
+      y: f.position.y,
+      z: f.position.z,
+      rotation: f.rotation,
+      tiltAngle: f.tiltAngle,
+    }));
+  }
+  return previewFixtures(vertices);
+}
+
+function hitTestFixture(px, py, to, fixtures) {
+  for (let i = fixtures.length - 1; i >= 0; i--) {
+    const f = fixtures[i];
+    const p = to(f.x, f.y);
+    if (Math.hypot(p.x - px, p.y - py) <= 18) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+els.plan.addEventListener("mousedown", (ev) => {
+  if (!lastPlanMapper || !lastPlanBounds) return;
+  const { px, py } = getCanvasMousePos(els.plan, ev);
+  const unmap = unmapper(els.plan, lastPlanBounds);
+  const roomPos = unmap(px, py);
+  const fixtures = getActiveFixtures();
+  const hit = hitTestFixture(px, py, lastPlanMapper, fixtures);
+
+  if (hit >= 0) {
+    // If not in free mode yet, switch to free mode automatically so user can drag!
+    if (gridMode !== "free") {
+      unlockGridToFree();
+    }
+    selectedFixtureIndex = hit;
+    isDragging = true;
+    dragOffset = {
+      dx: freeFixtures[hit].x - roomPos.x,
+      dy: freeFixtures[hit].y - roomPos.y,
+    };
+    els.plan.style.cursor = "grabbing";
+    renderFreeFixturesList();
+    updateInspector();
+    renderAll();
+  } else {
+    if (activeTool === "add") {
+      if (gridMode !== "free") unlockGridToFree();
+      const snap = getSnap();
+      let nx = roomPos.x;
+      let ny = roomPos.y;
+      if (snap > 0) {
+        nx = Math.round(nx / snap) * snap;
+        ny = Math.round(ny / snap) * snap;
+      }
+      addFreeFixture(nx, ny);
+    } else {
+      selectedFixtureIndex = -1;
+      updateInspector();
+      renderFreeFixturesList();
+      renderAll();
+    }
+  }
+});
+
+els.plan.addEventListener("mousemove", (ev) => {
+  if (!lastPlanMapper || !lastPlanBounds) return;
+  const { px, py } = getCanvasMousePos(els.plan, ev);
+  const unmap = unmapper(els.plan, lastPlanBounds);
+  const roomPos = unmap(px, py);
+
+  if (isDragging && selectedFixtureIndex >= 0 && selectedFixtureIndex < freeFixtures.length) {
+    let nx = roomPos.x + dragOffset.dx;
+    let ny = roomPos.y + dragOffset.dy;
+    const snap = getSnap();
+    if (snap > 0) {
+      nx = Math.round(nx / snap) * snap;
+      ny = Math.round(ny / snap) * snap;
+    }
+    freeFixtures[selectedFixtureIndex].x = Number(nx.toFixed(3));
+    freeFixtures[selectedFixtureIndex].y = Number(ny.toFixed(3));
+    updateInspector();
+    renderAll();
+  } else {
+    const fixtures = getActiveFixtures();
+    const hit = hitTestFixture(px, py, lastPlanMapper, fixtures);
+    if (hit >= 0) {
+      els.plan.style.cursor = "grab";
+    } else if (activeTool === "add") {
+      els.plan.style.cursor = "crosshair";
+    } else {
+      els.plan.style.cursor = "default";
+    }
+  }
+});
+
+window.addEventListener("mouseup", () => {
+  if (isDragging) {
+    isDragging = false;
+    els.plan.style.cursor = "grab";
+    renderFreeFixturesList();
+    drawPolygonPreview();
+  }
+});
+
 function drawPlan(layer, s, kept) {
   const canvas = els.plan;
   const ctx = canvas.getContext("2d");
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  const pts = result.floorPatches.map((p) => p.center);
-  const extra = result.fixtures.flatMap((f) => [f.position, ...(f.corners || []), ...(f.elements || [])]);
+
+  const patches = result?.floorPatches || [];
+  const pts = patches.map((p) => p.center);
+  const fixtures = getActiveFixtures();
+  const extra = fixtures.map((f) => ({ x: f.x, y: f.y }));
   const b = boundsOf([...pts, ...extra, ...vertices]);
+  lastPlanBounds = b;
   const to = mapper(canvas, b);
-  els.legMin.textContent = s.kept ? s.min.toFixed(1) : "—";
-  els.legMax.textContent = s.kept ? s.max.toFixed(1) : "—";
+  lastPlanMapper = to;
+
+  els.legMin.textContent = s.kept ? `${s.min.toFixed(1)} lx` : "0 lx";
+  els.legMax.textContent = s.kept ? `${s.max.toFixed(1)} lx` : "0 lx";
   const span = s.max - s.min || 1;
   const keptSet = new Set(kept);
 
-  result.floorPatches.forEach((p, i) => {
-    const half = p.size / 2;
-    const a = to(p.center.x - half, p.center.y - half);
-    const c = to(p.center.x + half, p.center.y + half);
-    if (keptSet.has(i) && s.kept) {
-      ctx.fillStyle = luxColor((layer.values[i] - s.min) / span);
-    } else {
-      ctx.fillStyle = "rgba(232, 237, 247, 0.06)";
-    }
-    ctx.fillRect(a.x, c.y, c.x - a.x, a.y - c.y);
-  });
+  // 1. Heatmap patches
+  if (patches.length && layer && layer.values) {
+    patches.forEach((p, i) => {
+      const half = p.size / 2;
+      const a = to(p.center.x - half, p.center.y - half);
+      const c = to(p.center.x + half, p.center.y + half);
+      if (keptSet.has(i) && s.kept) {
+        ctx.fillStyle = luxColor((layer.values[i] - s.min) / span);
+      } else {
+        ctx.fillStyle = "rgba(232, 237, 247, 0.05)";
+      }
+      ctx.fillRect(a.x, c.y, c.x - a.x, a.y - c.y);
+    });
+  }
 
+  // 2. Room polygon boundary
   ctx.strokeStyle = "#d5dced";
-  ctx.lineWidth = 2;
+  ctx.lineWidth = 2.5;
   ctx.beginPath();
   vertices.forEach((v, i) => {
     const p = to(v.x, v.y);
@@ -388,43 +1006,91 @@ function drawPlan(layer, s, kept) {
   ctx.closePath();
   ctx.stroke();
 
-  result.fixtures.forEach((f) => {
-    const corners = f.corners || [];
-    const degenerate = !(f.length > 0 || f.width > 0);
-    if (corners.length >= 4 && !degenerate) {
+  // 3. Fixtures with tilt vectors and selection indicators
+  fixtures.forEach((f, idx) => {
+    const p = to(f.x, f.y);
+    const isSel = idx === selectedFixtureIndex;
+    const rot = f.rotation || 0;
+    const tilt = f.tiltAngle || 0;
+
+    // Fixture body
+    ctx.fillStyle = isSel ? "#00d2ff" : "#e0a106";
+    ctx.strokeStyle = isSel ? "#ffffff" : "#e0a106";
+    ctx.lineWidth = isSel ? 2 : 1.5;
+
+    ctx.beginPath();
+    ctx.moveTo(p.x, p.y - 7);
+    ctx.lineTo(p.x + 7, p.y);
+    ctx.lineTo(p.x, p.y + 7);
+    ctx.lineTo(p.x - 7, p.y);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    // Tilt & Aim direction vector arrow:
+    if (tilt > 0) {
+      const rotRad = (rot * Math.PI) / 180;
+      const tiltRad = (tilt * Math.PI) / 180;
+      // In 2D plan, screen Y is inverted relative to room Y
+      const dirX = Math.cos(rotRad);
+      const dirY = -Math.sin(rotRad);
+      const arrowLen = 18 + 26 * Math.sin(tiltRad);
+      const endX = p.x + dirX * arrowLen;
+      const endY = p.y + dirY * arrowLen;
+
+      // Draw light beam cone/triangle
+      const perpX = -dirY * 8 * Math.sin(tiltRad);
+      const perpY = dirX * 8 * Math.sin(tiltRad);
       ctx.beginPath();
-      corners.forEach((c, i) => {
-        const p = to(c.x, c.y);
-        if (i === 0) ctx.moveTo(p.x, p.y);
-        else ctx.lineTo(p.x, p.y);
-      });
+      ctx.moveTo(p.x, p.y);
+      ctx.lineTo(endX + perpX, endY + perpY);
+      ctx.lineTo(endX - perpX, endY - perpY);
       ctx.closePath();
-      ctx.fillStyle = "rgba(224, 161, 6, 0.35)";
-      ctx.strokeStyle = "#e0a106";
-      ctx.lineWidth = 1.5;
+      ctx.fillStyle = isSel ? "rgba(0, 210, 255, 0.22)" : "rgba(255, 213, 107, 0.2)";
       ctx.fill();
-      ctx.stroke();
-    }
-    (f.elements || []).forEach((e) => {
-      const p = to(e.x, e.y);
-      ctx.fillStyle = "#e0a106";
+
+      // Main aim arrow
       ctx.beginPath();
-      ctx.arc(p.x, p.y, degenerate ? 4 : 2, 0, Math.PI * 2);
+      ctx.moveTo(p.x, p.y);
+      ctx.lineTo(endX, endY);
+      ctx.strokeStyle = isSel ? "#00d2ff" : "#ffd56b";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      // Arrow head
+      ctx.beginPath();
+      ctx.arc(endX, endY, 3, 0, Math.PI * 2);
+      ctx.fillStyle = isSel ? "#00d2ff" : "#ffd56b";
       ctx.fill();
-    });
-    const p = to(f.position.x, f.position.y);
-    ctx.fillStyle = "#fff7cc";
-    ctx.font = "11px sans-serif";
-    ctx.fillText(
-      `${f.id}  z=${f.position.z.toFixed(3)}  ${Number(f.length).toFixed(2)}×${Number(f.width).toFixed(2)}`,
-      p.x + 8,
-      p.y - 6
-    );
+
+      // Tilt angle label
+      ctx.fillStyle = isSel ? "#00d2ff" : "#ffd56b";
+      ctx.font = "bold 9px sans-serif";
+      ctx.fillText(`${tilt}°`, endX + 4, endY - 3);
+    }
+
+    // Selection halo & resize/drag circle
+    if (isSel) {
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 14, 0, Math.PI * 2);
+      ctx.strokeStyle = "#00d2ff";
+      ctx.lineWidth = 2;
+      ctx.setLineDash([3, 3]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    // Fixture ID & Z label
+    ctx.fillStyle = isSel ? "#00d2ff" : "#fff7cc";
+    ctx.font = isSel ? "bold 11px sans-serif" : "10px sans-serif";
+    const zStr = f.z != null ? ` z=${f.z.toFixed(2)}` : "";
+    ctx.fillText(`${f.id}${zStr}`, p.x + 9, p.y - 7);
   });
 
+  // 4. Min / Max indicators
   function ring(i, color) {
-    if (i < 0) return;
-    const q = to(result.floorPatches[i].center.x, result.floorPatches[i].center.y);
+    if (i < 0 || !patches[i]) return;
+    const q = to(patches[i].center.x, patches[i].center.y);
     ctx.beginPath();
     ctx.arc(q.x, q.y, 7, 0, Math.PI * 2);
     ctx.strokeStyle = color;
@@ -484,33 +1150,38 @@ function drawPlanMini(canvas, patches, values) {
 }
 
 function matrixTable(title, matrix, patches) {
+  if (!matrix || !matrix.values) return "";
   const rows = matrix.values
+    .slice(0, 100) // preview first 100 for DOM speed
     .map((v, i) => {
       const p = patches[i];
       const loc = p ? `${p.id} (${p.center.x.toFixed(2)}, ${p.center.y.toFixed(2)}, ${p.center.z.toFixed(2)})` : i;
       return `<tr><td>${loc}</td><td>${v.toFixed(3)}</td></tr>`;
     })
     .join("");
+  const truncated = matrix.values.length > 100 ? `<div class="hint">Showing first 100 of ${matrix.values.length} patches</div>` : "";
   return `<article class="matrix">
     <h3>${title}</h3>
-    <div class="meta">${JSON.stringify(matrix.metadata)}</div>
+    <div class="meta">${JSON.stringify(matrix.metadata || {})}</div>
     <table><thead><tr><th>patch</th><th>lux</th></tr></thead><tbody>${rows}</tbody></table>
+    ${truncated}
   </article>`;
 }
 
 function sumMatrices(matrices) {
   if (!matrices.length) return { values: [], metadata: { kind: "sum-client" } };
-  const values = matrices[0].values.map((_, i) => matrices.reduce((acc, m) => acc + m.values[i], 0));
+  const values = matrices[0].values.map((_, i) => matrices.reduce((acc, m) => acc + (m.values ? m.values[i] : 0), 0));
   return { values, metadata: { kind: "sum-client" } };
 }
 
 function rebuildLayers() {
-  layers = [{ id: "total", label: "Total floor", matrix: result.totalFloorIlluminance, patches: result.floorPatches }];
-  for (const [fid, matrix] of Object.entries(result.directFloorMatrices)) {
+  if (!result) return;
+  layers = [{ id: "total", label: "Total floor", matrix: result.totalFloorIlluminance, patches: result.floorPatches || [] }];
+  for (const [fid, matrix] of Object.entries(result.directFloorMatrices || {})) {
     layers.push({ id: `df-${fid}`, label: `Direct floor · ${fid}`, matrix, patches: result.floorPatches });
   }
-  for (const [wid, matrix] of Object.entries(result.indirectFloorMatrices)) {
-    const b = matrix.metadata?.bounces ?? "?";
+  for (const [wid, matrix] of Object.entries(result.indirectFloorMatrices || {})) {
+    const b = matrix.metadata?.bounces ?? result.bounces ?? "?";
     const rw = matrix.metadata?.wallReflectance ?? result.wallReflectance ?? "?";
     const rf = matrix.metadata?.floorReflectance ?? result.floorReflectance ?? "?";
     const rc = matrix.metadata?.ceilingReflectance ?? result.ceilingReflectance ?? "?";
@@ -521,7 +1192,8 @@ function rebuildLayers() {
 }
 
 function dialuxCompare(values) {
-  const patches = result.floorPatches;
+  const patches = result?.floorPatches || [];
+  if (!patches.length) return;
   const parts = [];
   function one(label, xid, yid) {
     const pt = parseXY(xid, yid);
@@ -536,37 +1208,106 @@ function dialuxCompare(values) {
   one("Dialux max", "dxMaxX", "dxMaxY");
   els.dialuxNearest.textContent = parts.length
     ? parts.join(" · ")
-    : "Enter Dialux min/max coordinates to compare lux at the nearest patch (no re-run).";
+    : "Enter DIALux min/max coordinates to compare lux at the nearest patch (no re-run).";
+}
+
+function updateComplianceBanner(ev, comp) {
+  els.complianceBanner.hidden = false;
+  const targetL = optNum("targetLux") || 500;
+  const targetU = optNum("minUniformity") || 0.6;
+  const avg = ev ? ev.average : comp?.actualLux || 0;
+  const u0 = ev ? ev.uniformity : comp?.actualUniformity || 0;
+  const min = ev ? ev.minimum : 0;
+  const max = ev ? ev.maximum : 0;
+
+  const isCompliant = comp ? comp.compliant : (avg >= targetL && u0 >= targetU);
+  els.compBadge.className = `badge ${isCompliant ? "badge-pass" : "badge-fail"}`;
+  els.compBadge.textContent = isCompliant ? "✓ COMPLIANT" : "✗ NON-COMPLIANT";
+
+  els.compAvgLux.textContent = `${avg.toFixed(1)} lx`;
+  els.compTargetLux.textContent = `target ≥ ${targetL} lx`;
+  els.compUniformity.textContent = u0.toFixed(3);
+  els.compTargetU0.textContent = `target ≥ ${targetU.toFixed(2)}`;
+  els.compMinMax.textContent = `${min.toFixed(1)} / ${max.toFixed(1)} lx`;
+  els.compMF.textContent = (result.maintenanceFactor != null ? result.maintenanceFactor : (num("maintenanceFactor") || 0.8)).toFixed(2);
+}
+
+function renderVariantsShelf() {
+  if (!multiVariantResults || multiVariantResults.length <= 1) {
+    els.variantsShelf.hidden = true;
+    return;
+  }
+  els.variantsShelf.hidden = false;
+  els.variantsList.innerHTML = multiVariantResults
+    .map((vr, i) => {
+      const vid = vr.variantId || `Variant ${i + 1}`;
+      const ev = vr.evaluation;
+      const comp = vr.compliance;
+      const pass = comp ? comp.compliant : true;
+      const avg = ev ? ev.average.toFixed(1) : "—";
+      const u0 = ev ? ev.uniformity.toFixed(3) : "—";
+      const pw = vr.powerW != null ? `${vr.powerW.toFixed(1)} W` : "";
+      const pd = vr.powerDensity != null ? `${vr.powerDensity.toFixed(2)} W/m²` : "";
+      return `<div class="variant-card ${i === activeVariantIndex ? "active" : ""}" data-idx="${i}">
+        <div class="variant-title">
+          <span>${vid}</span>
+          <span class="badge ${pass ? "badge-pass" : "badge-fail"}" style="font-size:0.65rem;padding:0.1rem 0.35rem">${pass ? "PASS" : "FAIL"}</span>
+        </div>
+        <div class="variant-metrics">
+          <div>Avg: <strong>${avg} lx</strong> · U0: <strong>${u0}</strong></div>
+          ${pw || pd ? `<div>${pw} ${pd ? `(${pd})` : ""}</div>` : ""}
+        </div>
+      </div>`;
+    })
+    .join("");
+
+  els.variantsList.querySelectorAll(".variant-card").forEach((card) => {
+    card.addEventListener("click", () => {
+      activeVariantIndex = Number(card.dataset.idx);
+      result = multiVariantResults[activeVariantIndex];
+      rebuildLayers();
+      renderAll();
+      renderVariantsShelf();
+    });
+  });
 }
 
 function renderAll() {
+  if (!result) return;
   const layer = layers.find((l) => l.id === els.floorLayer.value) || layers[0];
-  const values = layer.matrix.values;
-  const kept = keptFloorIndices(result.floorPatches);
+  const values = layer ? layer.matrix.values : [];
+  const kept = keptFloorIndices(result.floorPatches || []);
   const s = layerStats(values, kept);
   const ev = result.evaluation;
-  const evBit = ev
-    ? ` · EN12464 ${ev.nx}×${ev.ny} px=${Number(ev.spacingX ?? ev.spacing).toFixed(3)} py=${Number(ev.spacingY ?? ev.spacing).toFixed(3)} z=${Number(ev.workPlaneHeight).toFixed(2)} wz=${Number(ev.wallZone).toFixed(2)} Emin ${Number(ev.minimum).toFixed(1)} @ ${fmtXY(ev.minPoint)} Emax ${Number(ev.maximum).toFixed(1)} @ ${fmtXY(ev.maxPoint)} U0=${Number(ev.uniformity).toFixed(3)}`
-    : "";
-  const z = result.floorPatches[0]?.center.z;
+
+  updateComplianceBanner(ev, result.compliance);
+
+  const z = result.floorPatches?.[0]?.center.z;
   const zBit = Number.isFinite(z) ? ` · work plane z=${z.toFixed(2)}` : "";
-  const minBit = s.kept ? `min ${s.min.toFixed(1)} @ ${fmtXY(result.floorPatches[s.minI].center)}` : "min —";
-  const maxBit = s.kept ? `max ${s.max.toFixed(1)} @ ${fmtXY(result.floorPatches[s.maxI].center)}` : "max —";
-  els.stats.textContent = `${result.fixtures.length} fixtures · ${result.bounces ?? "?"} bounces · ρw=${result.wallReflectance ?? "?"} ρf=${result.floorReflectance ?? "?"} ρc=${result.ceilingReflectance ?? "?"} · ceil ${result.ceilingHeight ?? "?"} m · mount ${result.mountingHeight ?? "?"} m · kept ${s.kept} / ${result.floorPatches.length}${zBit}${evBit} · ${layer.label} ${minBit} / avg ${s.avg.toFixed(1)} / ${maxBit} lux`;
-  drawPlan(layer.matrix, s, kept);
+  const evBit = ev
+    ? ` · EN12464 ${ev.nx}×${ev.ny} px=${Number(ev.spacingX ?? ev.spacing).toFixed(3)} py=${Number(ev.spacingY ?? ev.spacing).toFixed(3)} Emin ${Number(ev.minimum).toFixed(1)} Emax ${Number(ev.maximum).toFixed(1)} U0=${Number(ev.uniformity).toFixed(3)}`
+    : "";
+  const minBit = s.kept ? `min ${s.min.toFixed(1)}` : "min —";
+  const maxBit = s.kept ? `max ${s.max.toFixed(1)}` : "max —";
+  const fixCount = (result.fixtures || freeFixtures).length;
+  els.stats.textContent = `${fixCount} fixtures · ${result.bounces ?? num("bounces")} bounces · ρw=${result.wallReflectance ?? num("wallReflectance")} ρf=${result.floorReflectance ?? num("floorReflectance")} ρc=${result.ceilingReflectance ?? num("ceilingReflectance")} · MF=${result.maintenanceFactor ?? num("maintenanceFactor")}${zBit}${evBit} · ${layer?.label || "Total"} ${minBit} / avg ${s.avg.toFixed(1)} / ${maxBit} lux`;
+
+  drawPlan(layer?.matrix, s, kept);
   dialuxCompare(values);
 
+  // Wall Elevation Cards
   els.walls.innerHTML = "";
-  for (const [wid, patches] of Object.entries(result.wallPatches)) {
-    const perFix = result.directWallMatrices[wid] || {};
+  for (const [wid, patches] of Object.entries(result.wallPatches || {})) {
+    const perFix = (result.directWallMatrices || {})[wid] || {};
     const total = sumMatrices(Object.values(perFix));
     const card = document.createElement("div");
     card.className = "wall-card";
-    card.innerHTML = `<strong>${wid}</strong> · ${patches.length} patches · total direct (sum of fixtures)<canvas width="320" height="160"></canvas>`;
+    card.innerHTML = `<strong>${wid}</strong> · ${patches.length} patches · total direct<canvas width="320" height="160"></canvas>`;
     els.walls.appendChild(card);
     drawWall(card.querySelector("canvas"), patches, total.values);
   }
 
+  // Floor / Ceiling Mini Cards
   if ((result.floorPatches || []).length) {
     const total = sumMatrices(Object.values(result.directFloorMatrices || {}));
     if (total.values.length) {
@@ -592,28 +1333,30 @@ function renderAll() {
     }
   }
 
-  const blocks = [matrixTable("totalFloorIlluminance", result.totalFloorIlluminance, result.floorPatches)];
-  for (const [fid, matrix] of Object.entries(result.directFloorMatrices)) {
-    blocks.push(matrixTable(`directFloorMatrices[${fid}]`, matrix, result.floorPatches));
+  // Raw Matrices
+  const blocks = [matrixTable("totalFloorIlluminance", result.totalFloorIlluminance, result.floorPatches || [])];
+  for (const [fid, matrix] of Object.entries(result.directFloorMatrices || {})) {
+    blocks.push(matrixTable(`directFloorMatrices[${fid}]`, matrix, result.floorPatches || []));
   }
   for (const [fid, matrix] of Object.entries(result.directCeilingMatrices || {})) {
     blocks.push(matrixTable(`directCeilingMatrices[${fid}]`, matrix, ceilingPatches));
   }
-  for (const [wid, matrix] of Object.entries(result.indirectFloorMatrices)) {
-    blocks.push(matrixTable(`indirectFloorMatrices[${wid}]`, matrix, result.floorPatches));
+  for (const [wid, matrix] of Object.entries(result.indirectFloorMatrices || {})) {
+    blocks.push(matrixTable(`indirectFloorMatrices[${wid}]`, matrix, result.floorPatches || []));
   }
-  for (const [wid, byFix] of Object.entries(result.directWallMatrices)) {
-    const patches = result.wallPatches[wid] || [];
+  for (const [wid, byFix] of Object.entries(result.directWallMatrices || {})) {
+    const patches = (result.wallPatches || {})[wid] || [];
     for (const [fid, matrix] of Object.entries(byFix)) {
       blocks.push(matrixTable(`directWallMatrices[${wid}][${fid}]`, matrix, patches));
     }
   }
-  els.matrices.innerHTML = `<article class="matrix"><h3>fixtures</h3><table>
-    <thead><tr><th>id</th><th>x</th><th>y</th><th>z</th><th>L×W×H</th><th>elements</th><th>aim</th><th>rot</th></tr></thead>
-    <tbody>${result.fixtures
+  const fixturesList = result.fixtures || [];
+  els.matrices.innerHTML = `<article class="matrix"><h3>fixtures (${fixturesList.length})</h3><table>
+    <thead><tr><th>id</th><th>x</th><th>y</th><th>z</th><th>L×W×H</th><th>rot</th><th>tilt</th><th>aim</th></tr></thead>
+    <tbody>${fixturesList
       .map(
         (f) =>
-          `<tr><td>${f.id}</td><td>${f.position.x}</td><td>${f.position.y}</td><td>${f.position.z}</td><td>${f.length}×${f.width}×${f.height}</td><td>${(f.elements || []).length}</td><td>(${f.aimDirection.x}, ${f.aimDirection.y}, ${f.aimDirection.z})</td><td>${f.rotation}</td></tr>`
+          `<tr><td>${f.id}</td><td>${f.position.x.toFixed(3)}</td><td>${f.position.y.toFixed(3)}</td><td>${f.position.z.toFixed(3)}</td><td>${f.length ?? 0}×${f.width ?? 0}×${f.height ?? 0}</td><td>${f.rotation}°</td><td>${f.tiltAngle ?? 0}°</td><td>(${f.aimDirection ? `${f.aimDirection.x.toFixed(2)}, ${f.aimDirection.y.toFixed(2)}, ${f.aimDirection.z.toFixed(2)}` : "—"})</td></tr>`
       )
       .join("")}</tbody></table></article>${blocks.join("")}`;
 }
@@ -634,32 +1377,91 @@ function showStatus(text, kind) {
   els.status.textContent = text;
 }
 
-function payload() {
-  const opt = (id) => {
-    const raw = document.getElementById(id).value;
-    if (raw === "" || raw == null) return null;
-    const v = Number(raw);
-    return Number.isFinite(v) ? v : null;
-  };
+function buildPayload() {
   const body = {
     polygon: vertices.map((v) => ({ x: v.x, y: v.y })),
-    height: num("height"),
+    ceilingHeight: num("ceilingHeight") || 3.0,
+    mountingHeight: num("mountingHeight") || 3.0,
     workPlaneHeight: num("workPlaneHeight"),
-    grid: {
+    wallReflectance: num("wallReflectance") || 0.5,
+    floorReflectance: num("floorReflectance") || 0.2,
+    ceilingReflectance: num("ceilingReflectance") || 0.7,
+    maintenanceFactor: num("maintenanceFactor") || 0.8,
+    bounces: parseInt(document.getElementById("bounces").value, 10),
+    includeWallCeilingMatrices: document.getElementById("includeMatrices").checked,
+  };
+  const rot = optNum("luminaireRotation");
+  if (rot != null) body.luminaireRotation = rot;
+  const fz = optNum("floorZone");
+  if (fz != null) body.floorZone = fz;
+  const wz = optNum("wallZone");
+  if (wz != null) body.wallZone = wz;
+
+  // Compliance target
+  const targetL = optNum("targetLux");
+  const minU0 = optNum("minUniformity");
+  if (targetL != null) {
+    body.compliance = {
+      targetLux: targetL,
+      minUniformity: minU0 != null ? minU0 : 0.6,
+    };
+  }
+
+  // Grid or Free Placements
+  if (gridMode === "free") {
+    body.fixtures = freeFixtures.map((f, i) => {
+      const item = {
+        id: f.id || `F${i + 1}`,
+        x: Number(f.x),
+        y: Number(f.y),
+        rotation: Number(f.rotation || 0),
+        tiltAngle: Number(f.tiltAngle || 0),
+      };
+      if (f.z != null) item.z = Number(f.z);
+      if (f.variantId) item.variantId = f.variantId;
+      if (f.iesRef) item.iesRef = f.iesRef;
+      return item;
+    });
+    body.grid = null;
+  } else if (gridMode === "count") {
+    const elX = document.getElementById("countX") || document.getElementById("countNx");
+    const elY = document.getElementById("countY") || document.getElementById("countNy");
+    body.grid = {
+      count: {
+        countX: parseInt(elX ? elX.value : "1", 10) || 1,
+        countY: parseInt(elY ? elY.value : "1", 10) || 1,
+        offsetFraction: optNum("offsetFraction") != null ? Number(document.getElementById("offsetFraction").value) : 0.5,
+      },
+    };
+  } else if (gridMode === "spacing") {
+    const autoCenter = document.getElementById("spacingAutoCenter").checked;
+    const spacingObj = {
+      spacingX: num("spacingX"),
+      spacingY: num("spacingY"),
+      autoCenter: autoCenter,
+    };
+    if (!autoCenter) {
+      const ox = optNum("spacingOffsetX");
+      const oy = optNum("spacingOffsetY");
+      if (ox != null) spacingObj.offsetX = ox;
+      if (oy != null) spacingObj.offsetY = oy;
+    }
+    body.grid = { spacing: spacingObj };
+  } else {
+    // Axis mode
+    body.grid = {
       x: { spacing: num("xSpacing"), offsetBeginning: num("xOffB"), offsetEnding: num("xOffE") },
       y: { spacing: num("ySpacing"), offsetBeginning: num("yOffB"), offsetEnding: num("yOffE") },
-    },
-  };
-  const ceiling = opt("ceilingHeight");
-  const mounting = opt("mountingHeight");
-  if (ceiling != null) body.ceilingHeight = ceiling;
-  if (mounting != null) body.mountingHeight = mounting;
-  const rot = opt("luminaireRotation");
-  if (rot != null) body.luminaireRotation = rot;
-  const fz = opt("floorZone");
-  if (fz != null) body.floorZone = fz;
-  const wz = opt("wallZone");
-  if (wz != null) body.wallZone = wz;
+    };
+  }
+
+  // Default variant ID from catalog tab
+  if (studySource === "variants") {
+    const el = document.getElementById("variantId") || document.getElementById("variantIds");
+    const v = el ? el.value.trim() : "";
+    if (v) body.variantId = v;
+  }
+
   return body;
 }
 
@@ -671,30 +1473,100 @@ async function iesBlob() {
   return new File([await res.blob()], "sample.ies", { type: "text/plain" });
 }
 
-els.form.addEventListener("submit", async (ev) => {
-  ev.preventDefault();
-  const run = document.getElementById("run");
-  run.disabled = true;
-  showStatus("Calculating…", "");
+async function executeCalculation() {
+  const runBtn = document.getElementById("run");
+  runBtn.disabled = true;
+  els.btnRecalc.disabled = true;
+  els.btnInspRecalc.disabled = true;
+  showStatus("Calculating radiosity & illuminance…", "");
+
   try {
-    const body = new FormData();
-    body.append("payload", JSON.stringify(payload()));
-    body.append("iesFile", await iesBlob());
-    const res = await fetch(`${API}/calculate`, { method: "POST", body });
+    const payload = buildPayload();
+    let res;
+
+    const hasVariants = payload.variantId || (payload.fixtures && payload.fixtures.some((f) => f.variantId));
+    const iesInput = document.getElementById("iesFile");
+    const hasUploadedIes = iesInput && iesInput.files && iesInput.files.length > 0;
+
+    if (studySource === "variants" || (hasVariants && !hasUploadedIes)) {
+      // Pure JSON calculation
+      res = await fetch(`${API}/calculate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+    } else {
+      // Multipart upload with IES file
+      const body = new FormData();
+      body.append("payload", JSON.stringify(payload));
+      body.append("iesFile", await iesBlob());
+      res = await fetch(`${API}/calculate`, { method: "POST", body });
+    }
+
     const data = await res.json();
     if (!res.ok) {
       const err = data.error || data;
       throw new Error(`${err.code || res.status}: ${err.message || JSON.stringify(data)}`);
     }
-    result = data;
+
+    if (data.results && data.results.length > 0) {
+      multiVariantResults = data.results;
+      activeVariantIndex = 0;
+      result = data.results[0];
+      renderVariantsShelf();
+    } else {
+      multiVariantResults = null;
+      els.variantsShelf.hidden = true;
+      result = data;
+    }
+
+    // Sync freeFixtures if in Free Mode or update positions from response
+    if (gridMode === "free") {
+      // keep current freeFixtures, update z, variantId, iesRef if returned
+      if (result.fixtures && result.fixtures.length === freeFixtures.length) {
+        result.fixtures.forEach((rf, i) => {
+          if (freeFixtures[i].z == null) freeFixtures[i].z = rf.position.z;
+          if (rf.variantId && !freeFixtures[i].variantId) freeFixtures[i].variantId = rf.variantId;
+          if (rf.iesRef && !freeFixtures[i].iesRef) freeFixtures[i].iesRef = rf.iesRef;
+        });
+      }
+    } else {
+      // If was in grid mode, we can prepopulate free fixtures array
+      if (result.fixtures) {
+        freeFixtures = result.fixtures.map((f, i) => ({
+          id: f.id || `F${i + 1}`,
+          x: Number(f.position.x.toFixed(3)),
+          y: Number(f.position.y.toFixed(3)),
+          z: f.position.z != null ? Number(f.position.z.toFixed(3)) : null,
+          rotation: f.rotation || 0,
+          tiltAngle: f.tiltAngle || 0,
+          variantId: f.variantId,
+          iesRef: f.iesRef,
+        }));
+        renderFreeFixturesList();
+      }
+    }
+
     rebuildLayers();
     renderAll();
-    showStatus(`OK · ${res.headers.get("X-Request-ID") || ""}`, "ok");
+    showStatus(`Calculation Complete · Request ID: ${res.headers.get("X-Request-ID") || "OK"}`, "ok");
   } catch (err) {
     showStatus(String(err.message || err), "err");
   } finally {
-    run.disabled = false;
+    runBtn.disabled = false;
+    els.btnRecalc.disabled = false;
+    els.btnInspRecalc.disabled = false;
   }
+}
+
+els.form.addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  await executeCalculation();
 });
 
+els.btnRecalc.addEventListener("click", executeCalculation);
+els.btnInspRecalc.addEventListener("click", executeCalculation);
+
+// Initialization
 renderVerts();
+updateInspector();

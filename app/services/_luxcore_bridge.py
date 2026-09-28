@@ -216,7 +216,14 @@ class IesHandleCache:
         mod = LuxCoreRuntime().module
         if mod is None:
             raise _UsePythonFallback
-        key = id(profile)
+        key = (
+            id(profile),
+            round(float(profile.flux_scale), 8),
+            round(float(profile.multiplier), 8),
+            round(float(profile.width), 6),
+            round(float(profile.length), 6),
+            round(float(profile.height), 6),
+        )
         hit = cls._cache.get(key)
         if hit is not None:
             return hit

@@ -51,7 +51,8 @@ def test_grid_placements_parity():
     grid_result = calculate_service.calculate(
         CalculateRequest(
             polygon=[Point2D(x=x, y=y) for x, y in POLY],
-            height=3,
+            ceilingHeight=3.0,
+            mountingHeight=3.0,
             floorZone=0.25,
             wallZone=0.25,
             grid=GridInput(
@@ -159,7 +160,8 @@ def test_placements_endpoint_with_default_ies():
     client = TestClient(app)
     payload = {
         "polygon": [{"x": x, "y": y} for x, y in POLY],
-        "height": 3,
+        "ceilingHeight": 3.0,
+        "mountingHeight": 3.0,
         "fixtures": [{"x": 1, "y": 1}, {"x": 3, "y": 3, "rotation": 90}],
     }
     response = client.post(
@@ -178,7 +180,8 @@ def test_placements_endpoint_multi_ies_by_filename():
     client = TestClient(app)
     payload = {
         "polygon": [{"x": x, "y": y} for x, y in POLY],
-        "height": 3,
+        "ceilingHeight": 3.0,
+        "mountingHeight": 3.0,
         "fixtures": [{"x": 1, "y": 1, "iesRef": "dim.ies"}, {"x": 3, "y": 3, "iesRef": "bright.ies"}],
     }
     response = client.post(

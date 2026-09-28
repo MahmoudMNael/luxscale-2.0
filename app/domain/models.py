@@ -66,6 +66,8 @@ class FixturePlacement:
     rotation: float = 0.0
     aim_direction: Vec3 = (0.0, 0.0, -1.0)
     ies_ref: str | None = None
+    tilt_angle: float = 0.0
+    variant_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -75,6 +77,8 @@ class Fixture:
     aim_direction: Vec3
     rotation: float
     ies_profile: IESProfile
+    variant_id: str | None = None
+    ies_ref: str | None = None
 
 
 @dataclass(frozen=True)
@@ -94,6 +98,8 @@ class FixtureGeometry:
     height: float
     corners: list[Vec3]
     elements: list[Vec3]
+    variant_id: str | None = None
+    ies_ref: str | None = None
 
 
 @dataclass(frozen=True)

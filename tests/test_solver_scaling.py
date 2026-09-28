@@ -67,7 +67,8 @@ def test_resolve_degenerate_polygon_never_blows_up():
 def _payload(poly, height, spacing, offset) -> CalculateRequest:
     return CalculateRequest(
         polygon=[Point2D(x=x, y=y) for x, y in poly],
-        height=height,
+        ceilingHeight=height,
+        mountingHeight=height,
         grid=GridInput(
             x=AxisGrid(spacing=spacing, offsetBeginning=offset, offsetEnding=offset),
             y=AxisGrid(spacing=spacing, offsetBeginning=offset, offsetEnding=offset),

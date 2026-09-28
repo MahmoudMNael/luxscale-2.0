@@ -9,7 +9,8 @@ client = TestClient(app)
 
 PAYLOAD = {
     "polygon": [{"x": 0, "y": 0}, {"x": 4, "y": 0}, {"x": 4, "y": 4}, {"x": 0, "y": 4}],
-    "height": 3,
+    "ceilingHeight": 3.0,
+    "mountingHeight": 3.0,
     "grid": {
         "x": {"spacing": 2, "offsetBeginning": 1, "offsetEnding": 1},
         "y": {"spacing": 2, "offsetBeginning": 1, "offsetEnding": 1},
@@ -38,7 +39,7 @@ def test_calculate_200():
 
 
 def test_validation_422():
-    bad = {**PAYLOAD, "height": 0}
+    bad = {**PAYLOAD, "ceilingHeight": 0}
     response = client.post(
         "/calculate",
         data={"payload": json.dumps(bad)},
