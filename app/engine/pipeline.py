@@ -237,93 +237,97 @@ def run(
     floor_cell = eval.floor[0].size
     full_cell = cache.floor_full[0].size if cache.floor_full else floor_cell
 
-    # Solver-mesh direct (seeds for radiosity).
-    raw_floor_direct_full = (
-        {
-            fixture.id: compute_direct_matrix(
-                fixture,
-                cache.floor_full,
-                "floor",
-                patch_size=full_cell,
-                room_polygon=room.polygon,
-                c0_offset_deg=c0,
-            )
-            for fixture in fixtures
-        }
-        if cache.floor_full
-        else {}
-    )
+    # Solver-mesh direct (seeds for radiosity, only computed when bounces > 0).
+    raw_floor_direct_full: dict[str, Matrix] = {}
     raw_wall_direct_full: dict[str, dict[str, Matrix]] = {}
-    for wall in room.walls:
-        patches = cache.wall_full[wall.id]
-        if not patches:
-            raw_wall_direct_full[wall.id] = {}
-            continue
-        cell = patches[0].size
-        per_fix: dict[str, Matrix] = {}
-        for fixture in fixtures:
-            m = compute_direct_matrix(
-                fixture,
-                patches,
-                "wall",
-                patch_size=cell,
-                wall_id=wall.id,
-                room_polygon=room.polygon,
-                c0_offset_deg=c0,
-            )
-            m = Matrix(m.values, {**m.metadata, "patchSize": cell, "wallId": wall.id})
-            per_fix[fixture.id] = m
-        raw_wall_direct_full[wall.id] = per_fix
-    ceiling_full_cell = cache.ceiling_full[0].size if cache.ceiling_full else full_cell
-    raw_ceiling_direct_full = (
-        {
-            fixture.id: compute_direct_matrix(
-                fixture,
-                cache.ceiling_full,
-                "ceiling",
-                patch_size=ceiling_full_cell,
-                room_polygon=room.polygon,
-                c0_offset_deg=c0,
-            )
-            for fixture in fixtures
-        }
-        if cache.ceiling_full
-        else {}
-    )
-
-    offsets: dict[str, int] = {}
-    pos = 0
-    for wall in room.walls:
-        offsets[wall.id] = pos
-        pos += len(cache.wall_full[wall.id])
-    floor_offset = pos
-    pos += len(cache.floor_full)
-    ceiling_offset = pos
-
+    raw_ceiling_direct_full: dict[str, Matrix] = {}
     seeds: dict[str, list[float]] = {}
-    for wall in room.walls:
-        per_fix = raw_wall_direct_full.get(wall.id, {})
-        if not per_fix or not cache.wall_full[wall.id]:
-            continue
-        total_wall = sum_matrices(list(per_fix.values()))
-        seed = [0.0] * len(cache.sources)
-        start = offsets[wall.id]
-        seed[start : start + len(total_wall.values)] = list(total_wall.values)
-        seeds[wall.id] = seed
-    if raw_floor_direct_full:
-        total_floor_direct = sum_matrices(list(raw_floor_direct_full.values()))
-        seed = [0.0] * len(cache.sources)
-        seed[floor_offset : floor_offset + len(total_floor_direct.values)] = list(
-            total_floor_direct.values
+
+    if options.bounces > 0:
+        raw_floor_direct_full = (
+            {
+                fixture.id: compute_direct_matrix(
+                    fixture,
+                    cache.floor_full,
+                    "floor",
+                    patch_size=full_cell,
+                    room_polygon=room.polygon,
+                    c0_offset_deg=c0,
+                )
+                for fixture in fixtures
+            }
+            if cache.floor_full
+            else {}
         )
-        seeds["floor"] = seed
-    if raw_ceiling_direct_full and cache.ceiling_full:
-        total_ceiling_direct = sum_matrices(list(raw_ceiling_direct_full.values()))
-        seed = [0.0] * len(cache.sources)
-        seed[ceiling_offset : ceiling_offset + len(total_ceiling_direct.values)] = list(
-            total_ceiling_direct.values
+        for wall in room.walls:
+            patches = cache.wall_full[wall.id]
+            if not patches:
+                raw_wall_direct_full[wall.id] = {}
+                continue
+            cell = patches[0].size
+            per_fix: dict[str, Matrix] = {}
+            for fixture in fixtures:
+                m = compute_direct_matrix(
+                    fixture,
+                    patches,
+                    "wall",
+                    patch_size=cell,
+                    wall_id=wall.id,
+                    room_polygon=room.polygon,
+                    c0_offset_deg=c0,
+                )
+                m = Matrix(m.values, {**m.metadata, "patchSize": cell, "wallId": wall.id})
+                per_fix[fixture.id] = m
+            raw_wall_direct_full[wall.id] = per_fix
+        ceiling_full_cell = cache.ceiling_full[0].size if cache.ceiling_full else full_cell
+        raw_ceiling_direct_full = (
+            {
+                fixture.id: compute_direct_matrix(
+                    fixture,
+                    cache.ceiling_full,
+                    "ceiling",
+                    patch_size=ceiling_full_cell,
+                    room_polygon=room.polygon,
+                    c0_offset_deg=c0,
+                )
+                for fixture in fixtures
+            }
+            if cache.ceiling_full
+            else {}
         )
-        seeds["ceiling"] = seed
+
+        offsets: dict[str, int] = {}
+        pos = 0
+        for wall in room.walls:
+            offsets[wall.id] = pos
+            pos += len(cache.wall_full[wall.id])
+        floor_offset = pos
+        pos += len(cache.floor_full)
+        ceiling_offset = pos
+
+        for wall in room.walls:
+            per_fix = raw_wall_direct_full.get(wall.id, {})
+            if not per_fix or not cache.wall_full[wall.id]:
+                continue
+            total_wall = sum_matrices(list(per_fix.values()))
+            seed = [0.0] * len(cache.sources)
+            start = offsets[wall.id]
+            seed[start : start + len(total_wall.values)] = list(total_wall.values)
+            seeds[wall.id] = seed
+        if raw_floor_direct_full:
+            total_floor_direct = sum_matrices(list(raw_floor_direct_full.values()))
+            seed = [0.0] * len(cache.sources)
+            seed[floor_offset : floor_offset + len(total_floor_direct.values)] = list(
+                total_floor_direct.values
+            )
+            seeds["floor"] = seed
+        if raw_ceiling_direct_full and cache.ceiling_full:
+            total_ceiling_direct = sum_matrices(list(raw_ceiling_direct_full.values()))
+            seed = [0.0] * len(cache.sources)
+            seed[ceiling_offset : ceiling_offset + len(total_ceiling_direct.values)] = list(
+                total_ceiling_direct.values
+            )
+            seeds["ceiling"] = seed
 
     targets_full: dict[str, list[Patch]] = {
         "floor": cache.floor_full,
@@ -394,24 +398,25 @@ def run(
         else {}
     )
     raw_wall_direct: dict[str, dict[str, Matrix]] = {}
-    for wall in room.walls:
-        patches = eval.walls[wall.id]
-        if not patches:
-            raw_wall_direct[wall.id] = {}
-            continue
-        cell = patches[0].size
-        raw_wall_direct[wall.id] = {
-            fixture.id: compute_direct_matrix(
-                fixture,
-                patches,
-                "wall",
-                patch_size=cell,
-                wall_id=wall.id,
-                room_polygon=room.polygon,
-                c0_offset_deg=c0,
-            )
-            for fixture in fixtures
-        }
+    if options.include_wall_ceiling:
+        for wall in room.walls:
+            patches = eval.walls[wall.id]
+            if not patches:
+                raw_wall_direct[wall.id] = {}
+                continue
+            cell = patches[0].size
+            raw_wall_direct[wall.id] = {
+                fixture.id: compute_direct_matrix(
+                    fixture,
+                    patches,
+                    "wall",
+                    patch_size=cell,
+                    wall_id=wall.id,
+                    room_polygon=room.polygon,
+                    c0_offset_deg=c0,
+                )
+                for fixture in fixtures
+            }
     raw_ceiling_direct = (
         {
             fixture.id: compute_direct_matrix(
@@ -424,7 +429,7 @@ def run(
             )
             for fixture in fixtures
         }
-        if eval.ceiling
+        if eval.ceiling and options.include_wall_ceiling
         else {}
     )
 

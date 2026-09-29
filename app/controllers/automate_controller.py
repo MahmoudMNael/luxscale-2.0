@@ -40,6 +40,7 @@ from app.schemas.geometry import PatchDto, Vec3Dto
 from app.schemas.matrix import MatrixDto
 from app.services.ies_service import load_ies
 from app.services.variant_photometrics import apply_variant_dimensions, scale_profile_to_lumens
+from app.services.vector_math import polygon_area
 
 router = APIRouter()
 
@@ -138,9 +139,13 @@ async def automate(
         ),
     )
     polygon = [(p.x, p.y) for p in payload.polygon]
+    area = polygon_area(polygon)
+    max_fixtures = _resolve_max_fixtures(payload, polygon)
+    stage_b = _resolve_stage_b(payload, area)
     sx_range, sy_range = _resolve_spacing(payload, polygon)
     sx_vals = frange(sx_range.min, sx_range.max, sx_range.step)
     sy_vals = frange(sy_range.min, sy_range.max, sy_range.step)
+    rotations = _resolve_rotations(payload, sx_vals, sy_vals)
     outcome = run_search(
         RoomInput(
             polygon=polygon,
@@ -155,14 +160,14 @@ async def automate(
         sx_vals,
         sy_vals,
         list(payload.search.offsetFractions),
-        list(payload.search.rotations),
+        rotations,
         wattages=wattages,
         lumens=lumens,
-        max_fixtures=payload.search.maxFixtures,
+        max_fixtures=max_fixtures,
         min_wall_clearance=payload.search.minWallClearance,
         shr_max=payload.search.shrMax,
         top_k=payload.topK,
-        stage_b_n=payload.stageB,
+        stage_b_n=stage_b,
         options=options,
     )
     grids = outcome.grids
@@ -221,6 +226,34 @@ def _resolve_spacing(
             ]
         )
     return sx_range, sy_range
+
+
+def _resolve_max_fixtures(payload: AutomateRequest, polygon: list[tuple[float, float]]) -> int:
+    """Auto-scale maxFixtures for vast spaces when not explicitly overridden."""
+    if "maxFixtures" in payload.search.model_fields_set:
+        return payload.search.maxFixtures
+    area = polygon_area(polygon)
+    return max(payload.search.maxFixtures, int(area / 10.0))
+
+
+def _resolve_stage_b(payload: AutomateRequest, area: float) -> int:
+    """Scale Stage-B budget for vast spaces when not explicitly overridden."""
+    if "stageB" in payload.model_fields_set:
+        return payload.stageB
+    if area > 1000.0:
+        return 2
+    return payload.stageB
+
+
+def _resolve_rotations(
+    payload: AutomateRequest, sx_vals: list[float], sy_vals: list[float]
+) -> list[float]:
+    """Prune redundant 90° rotation when sx and sy are identical ranges."""
+    if "rotations" in payload.search.model_fields_set:
+        return list(payload.search.rotations)
+    if sx_vals == sy_vals:
+        return [0.0]
+    return list(payload.search.rotations)
 
 
 def _solution(

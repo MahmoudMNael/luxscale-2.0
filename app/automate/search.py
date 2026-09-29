@@ -128,25 +128,39 @@ def best_per_variant(rows: list, key_of, rank_of) -> list:
 
 
 def shortlist_for_key(
-    feas: list[_Row], rest: list[_Row], fallback: list[_Row], stage_b_n: int
+    feas: list[_Row],
+    rest: list[_Row],
+    fallback: list[_Row],
+    stage_b_n: int,
+    target: StandardTarget | None = None,
 ) -> list[_Row]:
     """Round-robin across fixture counts (feas entries first within each count).
 
-    Without this, one count band (e.g. dense layouts that look compliant in
-    direct-only Stage A but overshoot in full physics) hogs all stage_b_n
-    slots and intermediate counts — often the only compliant ones — are
-    never verified. Falls back to brightest-first when feas/rest are empty.
+    Without this, one count band hogs all stage_b_n slots.
+    When target is provided, count buckets are ordered by proximity to the
+    compliant window (_miss_key) so vast spaces don't waste slots on dim layouts.
     """
     buckets: dict[int, list[_Row]] = {}
     for row in feas:
         buckets.setdefault(row.count, []).append(row)
     for row in rest:
         buckets.setdefault(row.count, []).append(row)
+
+    if target is not None:
+        for count in buckets:
+            buckets[count].sort(key=lambda r: _miss_key(r.avg, r.u0, target))
+        ordered_counts = sorted(
+            buckets,
+            key=lambda c: (min(_miss_key(r.avg, r.u0, target) for r in buckets[c]), c),
+        )
+    else:
+        ordered_counts = sorted(buckets)
+
     ranked: list[_Row] = []
     depth = 0
     while len(ranked) < stage_b_n:
         progressed = False
-        for count in sorted(buckets):
+        for count in ordered_counts:
             if depth < len(buckets[count]):
                 ranked.append(buckets[count][depth])
                 progressed = True
@@ -195,7 +209,8 @@ def automate(
     pruned.setdefault("outside", 0)
     pruned.setdefault("count", 0)
     pruned.setdefault("lumen", 0)
-    direct_opts = replace(opts, bounces=0)
+    direct_opts = replace(opts, bounces=0, include_wall_ceiling=False)
+    stage_b_opts = replace(opts, include_wall_ceiling=False)
 
     # Stage A: cheap rank over (fixture x layout).
     rows_a: list[_Row] = []
@@ -245,14 +260,16 @@ def automate(
             key=lambda r: (r.count, -r.avg, -r.u0),
         )
         shortlist.extend(
-            shortlist_for_key(feas, rest, [r for r in rows_a if r.key == key], stage_b_n)
+            shortlist_for_key(
+                feas, rest, [r for r in rows_a if r.key == key], stage_b_n, target
+            )
         )
 
     # Stage B: full-physics verify.
     verified: list[Solution] = []
     for row in shortlist:
         fixtures = resolve_fixtures(room, row.placements, {row.key: catalog[row.key]}, mount_h, row.key)
-        result = run(fixtures, room, evaluation, cache, opts)
+        result = run(fixtures, room, evaluation, cache, stage_b_opts)
         ev = result.evaluation
         power = len(fixtures) * watts[row.key] if row.key in watts else None
         verified.append(

@@ -44,6 +44,7 @@ class PhysicsOptions:
     c0_offset_deg: float = C0_ORIENTATION_OFFSET_DEG
     solver_cell: float = SOLVER_CELL
     max_solver_patches: int = MAX_SOLVER_PATCHES
+    include_wall_ceiling: bool = True
 
 
 @dataclass(frozen=True)

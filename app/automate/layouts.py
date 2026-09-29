@@ -40,6 +40,8 @@ def frange(lo: float, hi: float, step: float) -> list[float]:
 # EDIT HERE to change what "auto" means.
 AUTO_SPACING_MIN = 1.5
 AUTO_SPACING_STEP = 0.5
+AUTO_SPACING_STEP_HIGH = 1.0
+AUTO_SPACING_HEIGHT_THRESHOLD = 3.0
 
 
 def auto_spacing_range(
@@ -55,16 +57,17 @@ def auto_spacing_range(
       room-bbox side (never wider than the room itself).
     - min: fixed floor (`AUTO_SPACING_MIN`); tiny rooms where max < min
       collapse to a single spacing instead of 422ing.
-    - step: `AUTO_SPACING_STEP`, doubled until
-      `len(x) x len(y) x combo_multiplier <= max_candidates`, where
-      `combo_multiplier = len(offsets) x len(rotations)`.
+    - step: `AUTO_SPACING_STEP` (0.5m) for mount_h <= 3.0m, or
+      `AUTO_SPACING_STEP_HIGH` (1.0m) for mount_h > 3.0m (vast/high spaces),
+      doubled until `len(x) x len(y) x combo_multiplier <= max_candidates`.
     """
     xs = [p[0] for p in polygon]
     ys = [p[1] for p in polygon]
     longest = max(max(xs) - min(xs), max(ys) - min(ys))
     hi = min(shr_max * mount_h, longest)
-    lo = min(AUTO_SPACING_MIN, hi)
-    step = AUTO_SPACING_STEP
+    lo_floor = max(AUTO_SPACING_MIN, round(0.5 * mount_h, 1)) if mount_h >= 4.0 else AUTO_SPACING_MIN
+    lo = min(lo_floor, hi)
+    step = AUTO_SPACING_STEP_HIGH if mount_h > AUTO_SPACING_HEIGHT_THRESHOLD else AUTO_SPACING_STEP
     for _ in range(20):  # safety bound; normally exits on the first pass
         n = len(frange(lo, hi, step)) ** 2 * max(combo_multiplier, 1)
         if n <= max_candidates:
