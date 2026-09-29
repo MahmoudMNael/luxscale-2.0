@@ -196,10 +196,18 @@ def test_application_derivation_threshold():
 
 
 def test_auto_spacing_from_room_and_mounting():
+    # <= 3.0m gets 0.5m step
+    lo, hi, step = auto_spacing_range(
+        [(0, 0), (10, 0), (10, 8), (0, 8)], 3.0, 1.5, 2, 2000
+    )
+    assert lo == 1.5 and hi == pytest.approx(4.5) and step == 0.5
+
+    # > 3.0m gets coarser 1.0m step for high/vast spaces
     lo, hi, step = auto_spacing_range(
         [(0, 0), (10, 0), (10, 8), (0, 8)], 3.2, 1.5, 2, 2000
     )
-    assert lo == 1.5 and hi == pytest.approx(4.8) and step == 0.5  # min(SHR 4.8, room 10)
+    assert lo == 1.5 and hi == pytest.approx(4.8) and step == 1.0
+
     # Tiny room collapses to a single spacing instead of erroring.
     assert auto_spacing_range([(0, 0), (1, 0), (1, 1), (0, 1)], 2.5, 1.5, 2, 2000) == (1.0, 1.0, 0.5)
     # Huge room widens the step to respect the candidate cap.
@@ -675,3 +683,80 @@ def test_automate_validation():
         assert client.post("/automate", json=huge).status_code == 422
     finally:
         app.dependency_overrides.clear()
+
+
+def test_resolve_max_fixtures_scales_with_area():
+    from app.controllers.automate_controller import _resolve_max_fixtures
+    from app.schemas.automate import AutomateRequest, SearchSpaceDto
+    from app.schemas.geometry import Point2D
+
+    # Standard office (10x10 = 100 m^2) defaults to 64
+    small_req = AutomateRequest(
+        activityId="office",
+        polygon=[Point2D(x=0, y=0), Point2D(x=10, y=0), Point2D(x=10, y=10), Point2D(x=0, y=10)],
+        ceilingHeight=3.0,
+        mountingHeight=2.8,
+    )
+    assert _resolve_max_fixtures(small_req, [(0, 0), (10, 0), (10, 10), (0, 10)]) == 64
+
+    # Vast space (100x60 = 6,000 m^2) auto-scales to 600
+    vast_req = AutomateRequest(
+        activityId="warehouse",
+        polygon=[Point2D(x=0, y=0), Point2D(x=100, y=0), Point2D(x=100, y=60), Point2D(x=0, y=60)],
+        ceilingHeight=8.0,
+        mountingHeight=7.0,
+    )
+    assert _resolve_max_fixtures(vast_req, [(0, 0), (100, 0), (100, 60), (0, 60)]) == 600
+
+    # Explicit maxFixtures override wins
+    explicit_req = AutomateRequest(
+        activityId="warehouse",
+        polygon=[Point2D(x=0, y=0), Point2D(x=100, y=0), Point2D(x=100, y=60), Point2D(x=0, y=60)],
+        ceilingHeight=8.0,
+        mountingHeight=7.0,
+        search=SearchSpaceDto(maxFixtures=150),
+    )
+    assert _resolve_max_fixtures(explicit_req, [(0, 0), (100, 0), (100, 60), (0, 60)]) == 150
+
+
+def test_auto_spacing_range_scales_floor_with_high_mounting():
+    # 7m high-bay mounting height scales minimum spacing floor to 3.5m and step to 1.0m
+    lo, hi, step = auto_spacing_range(
+        [(0, 0), (100, 0), (100, 60), (0, 60)], 7.0, 1.5, 2, 2000
+    )
+    assert lo == 3.5
+    assert hi == pytest.approx(10.5)
+    assert step == 1.0
+
+
+def test_resolve_rotations_and_stage_b():
+    from app.controllers.automate_controller import _resolve_rotations, _resolve_stage_b
+    from app.schemas.automate import AutomateRequest, SearchSpaceDto
+    from app.schemas.geometry import Point2D
+
+    poly = [Point2D(x=0, y=0), Point2D(x=10, y=0), Point2D(x=10, y=10), Point2D(x=0, y=10)]
+    req = AutomateRequest(activityId="office", polygon=poly, ceilingHeight=3.0, mountingHeight=2.8)
+
+    # Identical ranges without explicit rotation override collapse to [0.0]
+    assert _resolve_rotations(req, [1.5, 2.0], [1.5, 2.0]) == [0.0]
+    # Asymmetric ranges keep both rotations
+    assert _resolve_rotations(req, [1.5, 2.0], [2.5, 3.0]) == [0.0, 90.0]
+    # Explicit rotations override wins
+    req_rot = AutomateRequest(
+        activityId="office", polygon=poly, ceilingHeight=3.0, mountingHeight=2.8,
+        search=SearchSpaceDto(rotations=[45.0, 90.0]),
+    )
+    assert _resolve_rotations(req_rot, [1.5, 2.0], [1.5, 2.0]) == [45.0, 90.0]
+
+    # Stage-B: small space defaults to 12
+    assert _resolve_stage_b(req, 100.0) == 12
+    # Stage-B: vast space auto-scales to 2
+    assert _resolve_stage_b(req, 6000.0) == 2
+    # Stage-B: explicit override wins
+    req_b = AutomateRequest(
+        activityId="office", polygon=poly, ceilingHeight=3.0, mountingHeight=2.8,
+        stageB=6,
+    )
+    assert _resolve_stage_b(req_b, 6000.0) == 6
+
+
