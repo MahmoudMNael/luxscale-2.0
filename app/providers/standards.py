@@ -142,6 +142,68 @@ class RestStandardProvider:
             page += 1
         return out
 
+    def query_standards(
+        self,
+        page: int = 1,
+        limit: int = 20,
+        standard_code: str | None = None,
+        version_year: str | None = None,
+        is_latest: bool | None = None,
+        category_table_number: str | None = None,
+        activity: str | None = None,
+        keywords: list[str] | None = None,
+        match_mode: str = "any",
+    ) -> dict:
+        if not self.base_url:
+            raise ProviderError("STANDARDS_BASE_URL is not configured.")
+        params: dict[str, str] = {"page": str(page), "limit": str(limit)}
+        if standard_code:
+            params["standard_code"] = standard_code
+        if version_year:
+            params["version_year"] = version_year
+        if is_latest is not None:
+            params["is_latest"] = str(is_latest).lower()
+        if category_table_number:
+            params["category_table_number"] = category_table_number
+        if activity:
+            params["activity"] = activity
+        if match_mode:
+            params["match_mode"] = match_mode
+
+        query_str = urllib.parse.urlencode(params)
+        if keywords:
+            for kw in keywords:
+                query_str += f"&keywords={urllib.parse.quote_plus(kw)}"
+
+        url = f"{self.base_url}/standards/?{query_str}"
+        return _get_json(url, self.timeout_s)
+
+    def list_categories(
+        self,
+        standard_code: str | None = None,
+        version_year: str | None = None,
+        is_latest: bool | None = None,
+    ) -> dict:
+        if not self.base_url:
+            raise ProviderError("STANDARDS_BASE_URL is not configured.")
+        params: dict[str, str] = {}
+        if standard_code:
+            params["standard_code"] = standard_code
+        if version_year:
+            params["version_year"] = version_year
+        if is_latest is not None:
+            params["is_latest"] = str(is_latest).lower()
+
+        query_str = urllib.parse.urlencode(params)
+        url = f"{self.base_url}/standards/categories{('?' + query_str) if query_str else ''}"
+        return _get_json(url, self.timeout_s)
+
+    def get_standard_raw(self, standard_id: str) -> dict:
+        if not self.base_url:
+            raise ProviderError("STANDARDS_BASE_URL is not configured.")
+        key = urllib.parse.quote(str(standard_id), safe="")
+        return _get_json(f"{self.base_url}/standards/{key}", self.timeout_s)
+
 
 class InMemoryStandardProvider:
     """Test/dev stub with the same interface (no network)."""
@@ -204,6 +266,44 @@ class InMemoryStandardProvider:
                 )
             )
         return results
+
+    def query_standards(self, **kwargs) -> dict:
+        standards = self.list_standards()
+        items = [s.model_dump(mode="json") for s in standards]
+        return {
+            "success": True,
+            "data": items,
+            "pagination": {
+                "total_count": len(items),
+                "page_size": 20,
+                "current_page": 1,
+                "total_pages": 1,
+            },
+        }
+
+    def list_categories(self, **kwargs) -> dict:
+        return {
+            "success": True,
+            "data": [
+                {
+                    "standard_metadata": {"standard_code": "EN 12464-1", "version_year": "2021", "is_latest": True},
+                    "category_table_number": "5.1",
+                    "category_title": "Offices",
+                }
+            ],
+            "pagination": None,
+        }
+
+    def get_standard_raw(self, standard_id: str) -> dict:
+        target = self.get_target(standard_id)
+        return {
+            "success": True,
+            "data": {
+                "id": target.activity_id,
+                "activity": f"Office - {target.activity_id}",
+                "parameters": {"em_r_lx": target.avg_lux, "uo": target.uniformity},
+            },
+        }
 
 
 __all__ = [

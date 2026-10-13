@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from app.providers import (
@@ -129,50 +129,86 @@ def list_variants(
         raise HTTPException(status_code=502, detail=f"Fixtures API unavailable: {exc}") from exc
 
 
-@router.get("/standards", response_model=list[StandardItemDto])
+@router.get("/standards")
 def list_standards(
-    standard_provider: Annotated[StandardProvider, Depends(get_standard_provider)],
-) -> list[StandardItemDto]:
-    """Returns lighting standards directly from the SC-Admin standards provider."""
+    page: int = Query(default=1, ge=1),
+    limit: int = Query(default=20, ge=1, le=100),
+    standard_code: str | None = Query(default=None),
+    version_year: str | None = Query(default=None),
+    is_latest: bool | None = Query(default=None),
+    category_table_number: str | None = Query(default=None),
+    activity: str | None = Query(default=None),
+    keywords: list[str] = Query(default=[]),
+    match_mode: str = Query(default="any"),
+    standard_provider: Annotated[StandardProvider, Depends(get_standard_provider)] = None,
+):
+    """Returns lighting standards with pagination and search filters from SC-Admin."""
     try:
-        raw_standards = standard_provider.list_standards()
-        results: list[StandardItemDto] = []
-        for s in raw_standards:
-            try:
-                lux = s.target_illuminance()
-            except Exception:
-                lux = float(s.parameters.em_r_lx or s.parameters.em_u_lx or 0.0)
-            try:
-                uo = s.target_uniformity()
-            except Exception:
-                uo = float(s.parameters.uo or 0.0)
-
-            cat_title = s.hierarchy.category_title if s.hierarchy else ""
-            cat_lower = cat_title.lower()
-            app = "interior"
-            if "outdoor" in cat_lower or "road" in cat_lower:
-                app = "outdoor"
-            elif any(w in cat_lower for w in ("industrial", "metal", "workshop", "warehouse")):
-                app = "industrial"
-
-            code = s.standard_metadata.standard_code if s.standard_metadata else ""
-            name = f"{code} - {s.activity}" if code else s.activity
-            desc = s.searchable_text or f"{cat_title}: {s.activity}"
-
-            results.append(
-                StandardItemDto(
-                    id=str(s.id),
-                    name=name,
-                    application=app,
-                    targetLux=lux,
-                    targetUniformity=uo,
-                    description=desc,
-                )
+        if hasattr(standard_provider, "query_standards"):
+            return standard_provider.query_standards(
+                page=page,
+                limit=limit,
+                standard_code=standard_code,
+                version_year=version_year,
+                is_latest=is_latest,
+                category_table_number=category_table_number,
+                activity=activity,
+                keywords=keywords,
+                match_mode=match_mode,
             )
-        return results
+        raw_standards = standard_provider.list_standards()
+        items = [s.model_dump(mode="json") for s in raw_standards]
+        return {
+            "success": True,
+            "data": items,
+            "pagination": {
+                "total_count": len(items),
+                "page_size": limit,
+                "current_page": page,
+                "total_pages": max(1, (len(items) + limit - 1) // limit),
+            },
+        }
     except Exception as exc:
-        logger.error("Failed fetching standards from SC-Admin: %s", exc)
+        logger.error("Failed querying standards from SC-Admin: %s", exc)
         raise HTTPException(status_code=502, detail=f"Standards API unavailable: {exc}") from exc
+
+
+@router.get("/standards/categories")
+def list_standard_categories(
+    standard_code: str | None = Query(default=None),
+    version_year: str | None = Query(default=None),
+    is_latest: bool | None = Query(default=None),
+    standard_provider: Annotated[StandardProvider, Depends(get_standard_provider)] = None,
+):
+    """Returns distinct standard categories from SC-Admin."""
+    try:
+        if hasattr(standard_provider, "list_categories"):
+            return standard_provider.list_categories(
+                standard_code=standard_code,
+                version_year=version_year,
+                is_latest=is_latest,
+            )
+        return {"success": True, "data": []}
+    except Exception as exc:
+        logger.error("Failed fetching standard categories from SC-Admin: %s", exc)
+        raise HTTPException(status_code=502, detail=f"Standards API unavailable: {exc}") from exc
+
+
+@router.get("/standards/{standard_id}")
+def get_standard(
+    standard_id: str,
+    standard_provider: Annotated[StandardProvider, Depends(get_standard_provider)] = None,
+):
+    """Returns a specific standard by ID from SC-Admin."""
+    try:
+        if hasattr(standard_provider, "get_standard_raw"):
+            return standard_provider.get_standard_raw(standard_id)
+        target = standard_provider.get_target(standard_id)
+        return {"success": True, "data": target}
+    except Exception as exc:
+        logger.error("Failed fetching standard %s from SC-Admin: %s", standard_id, exc)
+        raise HTTPException(status_code=502, detail=f"Standards API unavailable: {exc}") from exc
+
 
 
 class VariantIesResponse(BaseModel):

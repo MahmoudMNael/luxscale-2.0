@@ -148,14 +148,15 @@ def test_v2_catalog_endpoints():
     assert "name" in variants[0]
     assert "power" in variants[0]
 
-    resp_standards = client.get("/api/v2/catalog/standards")
+    resp_standards = client.get("/api/v2/catalog/standards?limit=5")
     assert resp_standards.status_code == 200
-    standards = resp_standards.json()
+    res = resp_standards.json()
+    assert res.get("success") is True
+    standards = res.get("data", [])
     assert isinstance(standards, list)
-    assert len(standards) >= 5
-    assert "targetLux" in standards[0]
-    assert "targetUniformity" in standards[0]
-    assert any("Corridors" in s["name"] or "12464" in s["name"] for s in standards)
+    assert len(standards) >= 1
+    assert "activity" in standards[0]
+    assert "parameters" in standards[0]
 
     # Test IES fetch for the first variant
     first_vid = variants[0]["id"]
