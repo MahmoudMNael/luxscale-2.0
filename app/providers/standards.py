@@ -54,6 +54,7 @@ class StandardTarget:
 
 class StandardProvider(Protocol):
     def get_target(self, activity_id: str) -> StandardTarget: ...
+    def list_standards(self) -> list[StandardResponse]: ...
 
 
 def _get_json(url: str, timeout_s: float) -> dict:
@@ -114,12 +115,44 @@ class RestStandardProvider:
             raise ProviderError(f"Standards API payload for '{activity_id}' is invalid: {exc}.") from exc
         return target_from_standard(standard)
 
+    def list_standards(self) -> list[StandardResponse]:
+        if not self.base_url:
+            raise ProviderError("STANDARDS_BASE_URL is not configured.")
+        out: list[StandardResponse] = []
+        page = 1
+        while True:
+            params = {"page": page, "limit": 100}
+            query = urllib.parse.urlencode(params)
+            url = f"{self.base_url}/standards/?{query}"
+            payload = _get_json(url, self.timeout_s)
+            data = payload.get("data", [])
+            if not isinstance(data, list):
+                raise ProviderError(f"Standards API returned invalid payload for {url}.")
+            for item in data:
+                try:
+                    out.append(StandardResponse.model_validate(item))
+                except Exception as exc:
+                    raise ProviderError(f"Standards API record invalid ({url}): {exc}.") from exc
+            pagination = payload.get("pagination")
+            if not isinstance(pagination, dict):
+                break
+            total_pages = int(pagination.get("total_pages", page))
+            if page >= total_pages:
+                break
+            page += 1
+        return out
+
 
 class InMemoryStandardProvider:
     """Test/dev stub with the same interface (no network)."""
 
-    def __init__(self, targets: dict[str, StandardTarget] | None = None) -> None:
+    def __init__(
+        self,
+        targets: dict[str, StandardTarget] | None = None,
+        standards: list[StandardResponse] | None = None,
+    ) -> None:
         self._targets: dict[str, StandardTarget] = dict(targets or {})
+        self._standards: list[StandardResponse] = list(standards or [])
 
     def add(self, target: StandardTarget) -> None:
         self._targets[target.activity_id] = target
@@ -129,6 +162,48 @@ class InMemoryStandardProvider:
             return self._targets[activity_id]
         except KeyError as exc:
             raise ProviderError(f"Unknown activity '{activity_id}'.") from exc
+
+    def list_standards(self) -> list[StandardResponse]:
+        if self._standards:
+            return list(self._standards)
+        from datetime import datetime, timezone
+        from app.schemas.standards import (
+            StandardHierarchyDto,
+            StandardMetadataDto,
+            StandardParametersDto,
+        )
+        now = datetime.now(timezone.utc)
+        results = []
+        for target in self._targets.values():
+            results.append(
+                StandardResponse(
+                    id=target.activity_id,
+                    qdrant_point_id="stub-point-id",
+                    standard_metadata=StandardMetadataDto(
+                        standard_code="EN 12464-1",
+                        version_year="2021",
+                        is_latest=True,
+                    ),
+                    hierarchy=StandardHierarchyDto(
+                        category_table_number="5.1",
+                        category_title="Offices",
+                        ref_number="5.1.1",
+                        page=1,
+                    ),
+                    activity=f"Office - {target.activity_id}",
+                    parameters=StandardParametersDto(
+                        em_r_lx=target.avg_lux,
+                        em_u_lx=target.avg_lux,
+                        uo=target.uniformity,
+                        ra=80.0,
+                    ),
+                    searchable_text=f"Office {target.activity_id}",
+                    content_hash="stubhash",
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+        return results
 
 
 __all__ = [
