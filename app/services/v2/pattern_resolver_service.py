@@ -326,49 +326,104 @@ def _resolve_circumference(
     def_var: str | None,
     def_ies: str | None,
 ) -> list[FixturePlacement]:
-    if len(polygon) < 3:
+    bounds = getattr(pattern, "bounds", None)
+    poly = (
+        [
+            (bounds.minX, bounds.minY),
+            (bounds.maxX, bounds.minY),
+            (bounds.maxX, bounds.maxY),
+            (bounds.minX, bounds.maxY),
+        ]
+        if bounds
+        else polygon
+    )
+
+    if len(poly) < 3:
         return []
 
     offset = max(0.1, pattern.wallOffset)
     spacing = max(0.5, pattern.perimeterSpacing)
+    n = len(poly)
 
-    placements: list[FixturePlacement] = []
-    idx = 1
+    # 1. Determine polygon orientation (CCW vs CW) via signed area
+    signed_area = 0.0
+    for i in range(n):
+        j = (i + 1) % n
+        signed_area += poly[i][0] * poly[j][1]
+        signed_area -= poly[j][0] * poly[i][1]
+    is_ccw = signed_area > 0
 
-    n_vertices = len(polygon)
-    for i in range(n_vertices):
-        p1 = polygon[i]
-        p2 = polygon[(i + 1) % n_vertices]
+    # 2. Inward offset lines parallel to each edge
+    offset_edges = []
+    for i in range(n):
+        p1 = poly[i]
+        p2 = poly[(i + 1) % n]
         dx = p2[0] - p1[0]
         dy = p2[1] - p1[1]
         edge_len = math.hypot(dx, dy)
-        if edge_len < 0.3:
+        if edge_len < 1e-4:
             continue
 
         tx = dx / edge_len
         ty = dy / edge_len
-
-        # Inward normal
-        nx = -ty
-        ny = tx
-        mid_x = (p1[0] + p2[0]) / 2
-        mid_y = (p1[1] + p2[1]) / 2
-        if not point_in_polygon((mid_x + nx * 0.05, mid_y + ny * 0.05), polygon):
-            nx = -nx
-            ny = -ny
+        nx = -ty if is_ccw else ty
+        ny = tx if is_ccw else -tx
 
         wall_angle_deg = (math.degrees(math.atan2(dy, dx)) + 360.0) % 360.0
+        offset_edges.append({
+            "p1": (p1[0] + nx * offset, p1[1] + ny * offset),
+            "p2": (p2[0] + nx * offset, p2[1] + ny * offset),
+            "tangent": (tx, ty),
+            "wall_angle_deg": wall_angle_deg,
+        })
 
-        num_fixtures = max(1, int(edge_len // spacing))
-        edge_step = edge_len / (num_fixtures + 1)
+    m = len(offset_edges)
+    if m < 3:
+        return []
+
+    # 3. Intersect consecutive offset lines to get clean inset corners
+    inset_corners = []
+    for i in range(m):
+        e_prev = offset_edges[(i - 1 + m) % m]
+        e_curr = offset_edges[i]
+
+        x1, y1 = e_prev["p1"]
+        x2, y2 = e_prev["p2"]
+        x3, y3 = e_curr["p1"]
+        x4, y4 = e_curr["p2"]
+
+        denom = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4)
+        if abs(denom) > 1e-6:
+            ix = ((x1 * y2 - y1 * x2) * (x3 - x4) - (x1 - x2) * (x3 * y4 - y3 * x4)) / denom
+            iy = ((x1 * y2 - y1 * x2) * (y3 - y4) - (y1 - y2) * (x3 * y4 - y3 * x4)) / denom
+            inset_corners.append((ix, iy))
+        else:
+            inset_corners.append(e_curr["p1"])
+
+    # 4. Distribute fixtures along each inset boundary wall segment
+    placements: list[FixturePlacement] = []
+    idx = 1
+
+    for i in range(m):
+        c1 = inset_corners[i]
+        c2 = inset_corners[(i + 1) % m]
+        seg_dx = c2[0] - c1[0]
+        seg_dy = c2[1] - c1[1]
+        seg_len = math.hypot(seg_dx, seg_dy)
+        if seg_len < 0.4:
+            continue
+
+        seg_tx = seg_dx / seg_len
+        seg_ty = seg_dy / seg_len
+        edge = offset_edges[i]
+
+        num_fixtures = max(1, round(seg_len / spacing))
+        step = seg_len / (num_fixtures + 1)
 
         for s in range(1, num_fixtures + 1):
-            t_dist = s * edge_step
-            center_x = p1[0] + tx * t_dist + nx * offset
-            center_y = p1[1] + ty * t_dist + ny * offset
-
-            clean_x = round(center_x, 3)
-            clean_y = round(center_y, 3)
+            dist = s * step
+            clean_x = round(c1[0] + seg_tx * dist, 3)
+            clean_y = round(c1[1] + seg_ty * dist, 3)
 
             if point_in_polygon((clean_x, clean_y), polygon):
                 slot_key = f"w{i}_s{s}"
@@ -377,7 +432,7 @@ def _resolve_circumference(
                     x=clean_x,
                     y=clean_y,
                     z=z,
-                    rotation=(base_rot + wall_angle_deg) % 360.0,
+                    rotation=(base_rot + edge["wall_angle_deg"]) % 360.0,
                     tilt_angle=base_tilt,
                     variant_id=def_var,
                     ies_ref=def_ies,
