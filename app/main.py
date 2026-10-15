@@ -14,6 +14,7 @@ from app.controllers.automate_controller import router as automate_router
 from app.modules.projects.router import router as v2_projects_router
 from app.controllers.v2.calculate_controller import router as v2_calculate_router
 from app.controllers.v2.catalog_controller import router as v2_catalog_router
+from app.controllers.v2.automate_controller import router as v2_automate_router
 from app.domain.exceptions import AppError
 from app.exception_handlers import (
     app_error_handler,
@@ -46,6 +47,7 @@ app.include_router(automate_router)
 app.include_router(v2_projects_router)
 app.include_router(v2_calculate_router)
 app.include_router(v2_catalog_router)
+app.include_router(v2_automate_router)
 app.add_exception_handler(AppError, app_error_handler)
 app.add_exception_handler(UnicodeDecodeError, utf8_error_handler)
 app.add_exception_handler(RequestValidationError, validation_handler)

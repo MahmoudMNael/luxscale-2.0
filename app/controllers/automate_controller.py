@@ -38,6 +38,7 @@ from app.schemas.automate import (
 from app.schemas.errors import ErrorResponse
 from app.schemas.geometry import PatchDto, Vec3Dto
 from app.schemas.matrix import MatrixDto
+from app.schemas.v2.calculate import EvaluationPointDto
 from app.services.ies_service import load_ies
 from app.services.variant_photometrics import apply_variant_dimensions, scale_profile_to_lumens
 from app.services.vector_math import polygon_area
@@ -178,13 +179,13 @@ async def automate(
     return AutomateResponse(
         target=target,
         application=application,
-        solutions=[_solution(s, payload.mountingHeight, True, True) for s in outcome.solutions]
-        + [_solution(s, payload.mountingHeight, False, True) for s in outcome.overcap],
+        solutions=[_solution(s, payload.mountingHeight, True, True, floor_patches) for s in outcome.solutions]
+        + [_solution(s, payload.mountingHeight, False, True, floor_patches) for s in outcome.overcap],
         evaluatedA=outcome.evaluated_a,
         evaluatedB=outcome.evaluated_b,
         pruned=outcome.pruned,
         closestMiss=(
-            _solution(outcome.closest_miss, payload.mountingHeight, False, False)
+            _solution(outcome.closest_miss, payload.mountingHeight, False, False, floor_patches)
             if outcome.closest_miss else None
         ),
         appliedSpacingX=AppliedSpacingDto(min=sx_range.min, max=sx_range.max, step=sx_range.step),
@@ -257,8 +258,24 @@ def _resolve_rotations(
 
 
 def _solution(
-    sol: Solution, mounting_height: float, recommended: bool, with_heatmap: bool
+    sol: Solution,
+    mounting_height: float,
+    recommended: bool,
+    with_heatmap: bool,
+    floor_patches: list | None = None,
 ) -> SolutionDto:
+    points: list[EvaluationPointDto] = []
+    if with_heatmap and floor_patches and sol.floor_values:
+        points = [
+            EvaluationPointDto(
+                x=round(patch.center[0], 3),
+                y=round(patch.center[1], 3),
+                z=round(patch.center[2], 3),
+                lux=round(val, 1),
+            )
+            for patch, val in zip(floor_patches, sol.floor_values)
+        ]
+
     return SolutionDto(
         variantId=sol.variant_key,
         fixtureCount=sol.count,
@@ -298,6 +315,7 @@ def _solution(
         missReason=sol.miss_reason,
         recommended=recommended,
         totalFloor=MatrixDto(values=list(sol.floor_values), metadata={}) if with_heatmap else None,
+        points=points,
     )
 
 

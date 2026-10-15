@@ -113,29 +113,40 @@ def calculate_v2(
             detail="Room polygon area must be greater than zero.",
         )
 
-    # 2. Gather all placements: free fixtures + resolved patterns
+    # 2. Gather all placements: free fixtures + resolved patterns (deduplicated by position)
     placements: list[FixturePlacement] = []
+    seen_positions: set[tuple[float, float, float]] = set()
+
     if payload.fixtures:
         for f in payload.fixtures:
             rot = f.rotation if f.rotation is not None else 0.0
             tilt = f.tiltAngle if f.tiltAngle is not None else 0.0
-            placements.append(
-                FixturePlacement(
-                    id=f.id or f"F_{len(placements) + 1}",
-                    x=f.x,
-                    y=f.y,
-                    z=f.z if f.z is not None else payload.mountingHeight,
-                    rotation=rot,
-                    tilt_angle=tilt,
-                    variant_id=f.variantId,
-                    ies_ref=f.iesRef,
+            z = f.z if f.z is not None else payload.mountingHeight
+            pos_key = (round(f.x, 3), round(f.y, 3), round(z, 3))
+            if pos_key not in seen_positions:
+                seen_positions.add(pos_key)
+                placements.append(
+                    FixturePlacement(
+                        id=f.id or f"F_{len(placements) + 1}",
+                        x=f.x,
+                        y=f.y,
+                        z=z,
+                        rotation=rot,
+                        tilt_angle=tilt,
+                        variant_id=f.variantId,
+                        ies_ref=f.iesRef,
+                    )
                 )
-            )
 
     if payload.patterns:
         for pat in payload.patterns:
             pat_placements = resolve_pattern(pat, polygon, payload.mountingHeight)
-            placements.extend(pat_placements)
+            for pp in pat_placements:
+                pz = pp.z if pp.z is not None else payload.mountingHeight
+                pos_key = (round(pp.x, 3), round(pp.y, 3), round(pz, 3))
+                if pos_key not in seen_positions:
+                    seen_positions.add(pos_key)
+                    placements.append(pp)
 
     if not placements:
         raise HTTPException(

@@ -166,3 +166,52 @@ def test_v2_catalog_endpoints():
     assert ies_data["variantId"] == first_vid
     assert "IESNA" in ies_data["iesText"] or "TILT=" in ies_data["iesText"]
 
+
+def test_v2_calculate_deduplicates_overlapping_fixtures_and_patterns():
+    # Pass 4 fixtures that match the 2x2 grid from patterns
+    pattern = {
+        "id": "GRID_01",
+        "name": "Main Grid",
+        "type": "grid",
+        "gridType": "count",
+        "countX": 2,
+        "countY": 2,
+        "mountHeight": 2.8,
+        "baseRotation": 0.0,
+        "baseTilt": 0.0,
+    }
+    # Resolve what those 4 positions are for poly [0,0] to [6,4]
+    # countX=2, countY=2, autoCenter => x=[1.5, 4.5], y=[1.0, 3.0]
+    fixtures = [
+        {"id": "F1", "x": 1.5, "y": 1.0, "z": 2.8},
+        {"id": "F2", "x": 4.5, "y": 1.0, "z": 2.8},
+        {"id": "F3", "x": 1.5, "y": 3.0, "z": 2.8},
+        {"id": "F4", "x": 4.5, "y": 3.0, "z": 2.8},
+    ]
+    request_data = {
+        "polygon": [
+            {"x": 0.0, "y": 0.0},
+            {"x": 6.0, "y": 0.0},
+            {"x": 6.0, "y": 4.0},
+            {"x": 0.0, "y": 4.0},
+        ],
+        "ceilingHeight": 3.0,
+        "mountingHeight": 2.8,
+        "fixtures": fixtures,
+        "patterns": [pattern],
+        "workplanes": [
+            {
+                "id": "WP-DESK",
+                "name": "Desk Level",
+                "height": 0.85,
+                "margin": 0.5,
+                "targetLux": 500,
+            }
+        ],
+    }
+    resp = client.post("/api/v2/calculate", json=request_data)
+    assert resp.status_code == 200
+    data = resp.json()
+    # Must NOT double fixtures: exactly 4 fixtures evaluated
+    assert len(data["fixtures"]) == 4
+

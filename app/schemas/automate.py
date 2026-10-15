@@ -12,6 +12,7 @@ from app.app_settings import (
 from app.automate.layouts import frange
 from app.schemas.geometry import PatchDto, Point2D, Vec3Dto
 from app.schemas.matrix import MatrixDto
+from app.schemas.v2.calculate import EvaluationPointDto
 
 _MAX_CANDIDATES = 2000
 
@@ -239,6 +240,10 @@ class SolutionDto(BaseModel):
         default=None,
         description="Maintained total floor illuminance (lux), one value per floorPatches entry, same order. "
         "Solutions only; None on the closest miss.",
+    )
+    points: list[EvaluationPointDto] = Field(
+        default_factory=list,
+        description="Pre-paired (x, y, z, lux) evaluation points for this solution on the workplane",
     )
 
 
