@@ -168,21 +168,28 @@ def calculate_v2(
     # 3b. External catalog variants (unconstrained: indoor/outdoor, main or non-main)
     variant_ids_needed: set[str] = set()
     for p in placements:
-        if p.variant_id and p.variant_id not in profiles:
+        if p.variant_id:
             variant_ids_needed.add(p.variant_id)
+        elif p.ies_ref and not p.ies_ref.endswith((".ies", ".ldt", ".txt")) and p.ies_ref not in profiles:
+            variant_ids_needed.add(p.ies_ref)
 
     if variant_ids_needed:
         try:
             specs = fixture_provider.get_variants(list(variant_ids_needed), main_only=False)
             for s in specs:
                 specs_by_id[s.id] = s
-                base_prof = load_ies(s.ies_text)
-                scaled_prof = scale_profile_to_lumens(base_prof, s.lumens) if s.lumens else base_prof
+                if s.variant_id:
+                    specs_by_id[s.variant_id] = s
+                ies_text = (payload.assets or {}).get(s.id) or (payload.assets or {}).get(s.variant_id) or s.ies_text
+                base_prof = load_ies(ies_text)
+                target_lumens = s.lumens if s.lumens and s.lumens > 0 else (s.power * s.efficacy if s.power and s.efficacy else None)
+                scaled_prof = scale_profile_to_lumens(base_prof, float(target_lumens)) if target_lumens else base_prof
                 prof = apply_variant_dimensions(scaled_prof, s.length, s.width, s.height)
                 profiles[s.id] = prof
-        except Exception:
-            # Fallback for offline dev / missing variant
-            pass
+                if s.variant_id:
+                    profiles[s.variant_id] = prof
+        except Exception as exc:
+            logger.warning("Could not resolve or scale catalog variants %s: %s", variant_ids_needed, exc)
 
     # Ensure a default profile exists if needed
     if "default" not in profiles:

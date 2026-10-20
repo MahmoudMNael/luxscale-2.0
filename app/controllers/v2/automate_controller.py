@@ -132,12 +132,15 @@ def _run_automate_sync(
         for spec in specs:
             profile = load_ies(spec.ies_text)
             profile = apply_variant_dimensions(profile, spec.length, spec.width, spec.height)
-            if spec.lumens is not None:
-                profile = scale_profile_to_lumens(profile, float(spec.lumens))
+            target_lumens = spec.lumens if spec.lumens and spec.lumens > 0 else (spec.power * spec.efficacy if spec.power and spec.efficacy else None)
+            if target_lumens:
+                profile = scale_profile_to_lumens(profile, float(target_lumens))
             profiles[spec.id] = profile
+            if spec.variant_id:
+                profiles[spec.variant_id] = profile
 
         wattages = {spec.id: float(spec.wattage) for spec in specs if spec.wattage is not None}
-        lumens = {spec.id: float(spec.lumens) for spec in specs if spec.lumens is not None}
+        lumens = {spec.id: float(spec.lumens if spec.lumens and spec.lumens > 0 else (spec.power * spec.efficacy if spec.power and spec.efficacy else 0)) for spec in specs}
 
         # 4. Physics Options
         options = PhysicsOptions(

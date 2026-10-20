@@ -303,15 +303,21 @@ def spec_from_variant(variant: VariantDetailResponse, ies_text: str) -> FixtureS
         radius_m = _mm_to_m(variant.dimension_radius)
         if radius_m is not None:
             length = width = 2.0 * radius_m
+    calc_lumens = variant_lumens(variant)
+    power_w = variant_wattage(variant)
+    eff = float(getattr(variant, "efficacy", 0) or 0)
+    if calc_lumens <= 0 and power_w > 0 and eff > 0:
+        calc_lumens = power_w * eff
+
     return FixtureSpec(
         id=str(variant.id),
         fixture_id=str(variant.fixture_id),
         variant_id=str(variant.id),
         ies_text=ies_text,
-        wattage=variant_wattage(variant),
-        lumens=variant_lumens(variant),
-        efficacy=float(variant.efficacy),
-        power=float(variant.power),
+        wattage=power_w,
+        lumens=calc_lumens if calc_lumens > 0 else None,
+        efficacy=eff,
+        power=power_w,
         length=length,
         width=width,
         height=_mm_to_m(variant.dimension_depth),

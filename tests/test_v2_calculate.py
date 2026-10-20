@@ -215,3 +215,85 @@ def test_v2_calculate_deduplicates_overlapping_fixtures_and_patterns():
     # Must NOT double fixtures: exactly 4 fixtures evaluated
     assert len(data["fixtures"]) == 4
 
+
+def test_v2_calculate_scales_ies_to_target_lumens_and_handles_assets():
+    from app.controllers.v2.calculate_controller import _get_fixture_provider
+    from app.providers import FixtureSpec, InMemoryFixtureProvider
+    from tests.ies_sample import ies_with
+
+    # Base IES with 1.2m x 0.3m dimensions and 1000 lm base
+    base_ies = ies_with(lumens=1000.0, length=1.2, width=0.3, height=0.08)
+
+    # 1. Base unscaled reference (1000 lm, 40W default)
+    base_request = {
+        "polygon": [{"x": 0.0, "y": 0.0}, {"x": 5.0, "y": 0.0}, {"x": 5.0, "y": 5.0}, {"x": 0.0, "y": 5.0}],
+        "ceilingHeight": 3.0,
+        "mountingHeight": 2.8,
+        "fixtures": [{"id": "F1", "x": 2.5, "y": 2.5, "iesRef": "base.ies"}],
+        "assets": {"base.ies": base_ies},
+        "workplanes": [{"id": "WP-01", "height": 0.85, "margin": 0.5}],
+        "bounces": 0,
+    }
+    base_resp = client.post("/api/v2/calculate", json=base_request)
+    assert base_resp.status_code == 200
+    base_avg = base_resp.json()["workplaneResults"]["WP-01"]["evaluation"]["average"]
+
+    # 2. SC-Admin catalog fixture with 30W, 150 lm/W => target lumens = 4500 lm (4.5x base)
+    spec = FixtureSpec(
+        id="var-4500",
+        fixture_id="fix-4500",
+        variant_id="var-4500",
+        ies_text=base_ies,
+        wattage=30.0,
+        lumens=4500.0,
+        power=30.0,
+        efficacy=150.0,
+        length=1.2,
+        width=0.3,
+        height=0.08,
+        is_main_solution=True,
+    )
+    fix_prov = InMemoryFixtureProvider({spec.id: spec})
+    app.dependency_overrides[_get_fixture_provider] = lambda: fix_prov
+
+    try:
+        # A: Fetch via variantId directly (no assets provided)
+        req_a = {
+            "polygon": [{"x": 0.0, "y": 0.0}, {"x": 5.0, "y": 0.0}, {"x": 5.0, "y": 5.0}, {"x": 0.0, "y": 5.0}],
+            "ceilingHeight": 3.0,
+            "mountingHeight": 2.8,
+            "fixtures": [{"id": "F1", "x": 2.5, "y": 2.5, "variantId": "var-4500"}],
+            "workplanes": [{"id": "WP-01", "height": 0.85, "margin": 0.5}],
+            "bounces": 0,
+        }
+        resp_a = client.post("/api/v2/calculate", json=req_a)
+        assert resp_a.status_code == 200, resp_a.text
+        data_a = resp_a.json()
+        assert data_a["totalPowerWatts"] == 30.0
+        assert data_a["fixtures"][0]["length"] == pytest.approx(1.2)
+        assert data_a["fixtures"][0]["width"] == pytest.approx(0.3)
+        avg_a = data_a["workplaneResults"]["WP-01"]["evaluation"]["average"]
+        assert avg_a == pytest.approx(base_avg * 4.5, rel=1e-3)
+
+        # B: Fetch via variantId WITH assets provided (e.g. Studio caching raw IES)
+        req_b = {
+            "polygon": [{"x": 0.0, "y": 0.0}, {"x": 5.0, "y": 0.0}, {"x": 5.0, "y": 5.0}, {"x": 0.0, "y": 5.0}],
+            "ceilingHeight": 3.0,
+            "mountingHeight": 2.8,
+            "fixtures": [{"id": "F1", "x": 2.5, "y": 2.5, "variantId": "var-4500"}],
+            "assets": {"var-4500": base_ies},
+            "workplanes": [{"id": "WP-01", "height": 0.85, "margin": 0.5}],
+            "bounces": 0,
+        }
+        resp_b = client.post("/api/v2/calculate", json=req_b)
+        assert resp_b.status_code == 200, resp_b.text
+        data_b = resp_b.json()
+        assert data_b["totalPowerWatts"] == 30.0
+        assert data_b["fixtures"][0]["length"] == pytest.approx(1.2)
+        assert data_b["fixtures"][0]["width"] == pytest.approx(0.3)
+        avg_b = data_b["workplaneResults"]["WP-01"]["evaluation"]["average"]
+        assert avg_b == pytest.approx(base_avg * 4.5, rel=1e-3)
+        assert avg_b == pytest.approx(avg_a, rel=1e-5)
+    finally:
+        app.dependency_overrides.clear()
+
