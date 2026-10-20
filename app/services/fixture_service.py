@@ -5,7 +5,7 @@ import math
 from app.domain.exceptions import NoFixturesError
 from app.domain.models import Fixture, FixtureGeometry, FixturePlacement, IESProfile, Room, Vec3
 from app.schemas.grid import GridInput
-from app.services.vector_math import EPS, normalize, point_in_polygon
+from app.services.vector_math import EPS, is_fixture_inside_room, normalize, point_in_polygon
 
 import logging
 
@@ -29,9 +29,6 @@ def build_fixtures(
     """
     fixtures: list[Fixture] = []
     for placement in placements:
-        if not point_in_polygon((placement.x, placement.y), polygon):
-            _log.warning("fixture %s outside room polygon, skipped", placement.id)
-            continue
         v_id = getattr(placement, "variant_id", None)
         i_ref = getattr(placement, "ies_ref", None)
         ref = v_id or i_ref or default_ref or ""
@@ -44,6 +41,11 @@ def build_fixtures(
             profile = profiles.get(default_ref)
         if profile is None:  # caller validates refs; guard for direct use
             raise NoFixturesError(f"Fixture '{placement.id}' has no photometry profile.")
+
+        rot = placement.rotation if placement.rotation is not None else 0.0
+        if not is_fixture_inside_room((placement.x, placement.y), profile.length, profile.width, rot, polygon):
+            _log.warning("fixture %s outside room polygon or bounds, skipped", placement.id)
+            continue
         z = placement.z if placement.z is not None else mounting_default - profile.height / 2.0
         fixtures.append(
             Fixture(

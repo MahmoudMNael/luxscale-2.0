@@ -212,3 +212,33 @@ def test_shapely_clip_keeps_inner_corner():
     assert point_in_polygon((0.75, 0.75), l_poly)
     assert not point_in_polygon((2, 2), l_poly)
     assert signed_area([(0, 0), (1, 0), (1, 1), (0, 1)]) > 0
+
+
+def test_is_fixture_inside_room_dimension_and_rotation_checks():
+    from app.services.vector_math import is_fixture_inside_room
+
+    rect = [(0.0, 0.0), (10.0, 0.0), (10.0, 6.0), (0.0, 6.0)]
+
+    # 1. Centered fixture with 1.2m x 0.6m dimensions fits cleanly
+    assert is_fixture_inside_room((5.0, 3.0), length=1.2, width=0.6, rotation_deg=0.0, polygon=rect) is True
+
+    # 2. Fixture whose center is inside (x=0.3), but half-length (0.6m) extends to x=-0.3 (outside)
+    assert is_fixture_inside_room((0.3, 3.0), length=1.2, width=0.6, rotation_deg=0.0, polygon=rect) is False
+
+    # 3. Same fixture rotated 90 deg: along X width/2 is 0.3m -> extends to x=0.0 (boundary fits!)
+    assert is_fixture_inside_room((0.3, 3.0), length=1.2, width=0.6, rotation_deg=90.0, polygon=rect) is True
+    # If placed at x=0.2, rotated 90 deg: width/2 is 0.3m -> extends to x=-0.1 (outside!)
+    assert is_fixture_inside_room((0.2, 3.0), length=1.2, width=0.6, rotation_deg=90.0, polygon=rect) is False
+
+    # 4. Point source (0x0) degrades to point-in-polygon
+    assert is_fixture_inside_room((0.2, 3.0), length=0.0, width=0.0, rotation_deg=0.0, polygon=rect) is True
+    assert is_fixture_inside_room((-0.1, 3.0), length=0.0, width=0.0, rotation_deg=0.0, polygon=rect) is False
+
+    # 5. L-shaped room: fixture near inner notch
+    # L-shape: bottom leg [0..4]x[0..2], top leg [0..2]x[2..4]. Inner notch corner is at (2, 2)
+    l_poly = [(0.0, 0.0), (4.0, 0.0), (4.0, 2.0), (2.0, 2.0), (2.0, 4.0), (0.0, 4.0)]
+    # Center at (1.8, 1.8) is inside, but a 1.0m x 1.0m fixture crosses through the (2,2) inner wall into (2.3, 2.3)
+    assert is_fixture_inside_room((1.8, 1.8), length=1.0, width=1.0, rotation_deg=0.0, polygon=l_poly) is False
+    # Smaller fixture (0.2m x 0.2m) at (1.8, 1.8) stays inside [1.7..1.9] x [1.7..1.9]
+    assert is_fixture_inside_room((1.8, 1.8), length=0.2, width=0.2, rotation_deg=0.0, polygon=l_poly) is True
+

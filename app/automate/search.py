@@ -216,7 +216,9 @@ def automate(
     rows_a: list[_Row] = []
     for key, profile in catalog.items():
         for spec in specs:
-            placements = placements_for_layout(room.polygon, spec)
+            placements = placements_for_layout(
+                room.polygon, spec, length=profile.length, width=profile.width
+            )
             if not placements:
                 pruned["outside"] += 1
                 continue

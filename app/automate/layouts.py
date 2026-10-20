@@ -11,7 +11,7 @@ from dataclasses import dataclass
 
 from app.domain.models import FixturePlacement
 from app.services.fixture_service import axis_positions
-from app.services.vector_math import EPS, point_in_polygon
+from app.services.vector_math import EPS, is_fixture_inside_room, point_in_polygon
 
 
 @dataclass(frozen=True)
@@ -112,8 +112,14 @@ def enumerate_layouts(
 def placements_for_layout(
     polygon: list[tuple[float, float]],
     spec: LayoutSpec,
+    length: float = 0.0,
+    width: float = 0.0,
 ) -> list[FixturePlacement]:
-    """LayoutSpec -> free placements (same ordering/ids as the legacy grid)."""
+    """LayoutSpec -> free placements (same ordering/ids as the legacy grid).
+
+    Validates that the entire fixture body (considering length, width, and rotation)
+    remains strictly within the room polygon.
+    """
     xs = [p[0] for p in polygon]
     ys = [p[1] for p in polygon]
     xmin, xmax, ymin, ymax = min(xs), max(xs), min(ys), max(ys)
@@ -121,7 +127,7 @@ def placements_for_layout(
     n = 1
     for y in axis_positions(ymin, ymax, spec.sy, spec.oy, spec.oy):
         for x in axis_positions(xmin, xmax, spec.sx, spec.ox, spec.ox):
-            if not point_in_polygon((x, y), polygon):
+            if not is_fixture_inside_room((x, y), length, width, spec.rotation, polygon):
                 continue
             placements.append(FixturePlacement(id=f"F{n}", x=x, y=y, rotation=spec.rotation))
             n += 1
