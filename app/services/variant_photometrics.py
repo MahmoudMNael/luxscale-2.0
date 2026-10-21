@@ -37,14 +37,23 @@ def variant_wattage(variant: VariantResponse | VariantDetailResponse) -> float:
     return float(getattr(variant, VARIANT_WATTS_FIELD))
 
 
-def variant_lumens(variant: VariantResponse | VariantDetailResponse) -> float:
+def variant_lumens(variant: VariantResponse | VariantDetailResponse | object) -> float:
     """Installed flux per fitting, lumens.
 
-    EDIT THIS FORMULA to change the watts/efficacy mapping globally.
-    Current: power (W) x efficacy (lm/W).
+    Checks explicit lumens / rated_lumens first if positive,
+    otherwise power (W) x efficacy (lm/W).
     """
-    power = float(getattr(variant, VARIANT_WATTS_FIELD))
-    efficacy = float(getattr(variant, VARIANT_EFFICACY_FIELD))
+    for attr in ("lumens", "rated_lumens"):
+        val = getattr(variant, attr, None)
+        if val is not None:
+            try:
+                f_val = float(val)
+                if f_val > 0:
+                    return f_val
+            except (TypeError, ValueError):
+                pass
+    power = float(getattr(variant, VARIANT_WATTS_FIELD, 0) or 0)
+    efficacy = float(getattr(variant, VARIANT_EFFICACY_FIELD, 0) or 0)
     return power * efficacy
 
 

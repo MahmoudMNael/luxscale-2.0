@@ -87,10 +87,15 @@ def _load_and_scale_variant_specs(
     specs = prov.get_variants(variant_ids, main_only=False)
     for s in specs:
         specs_by_id[s.id] = s
+        if s.variant_id:
+            specs_by_id[s.variant_id] = s
         base_prof = load_ies(s.ies_text)
-        scaled_prof = scale_profile_to_lumens(base_prof, s.lumens) if s.lumens else base_prof
+        target_lumens = s.lumens if s.lumens and s.lumens > 0 else (s.power * s.efficacy if s.power and s.efficacy else None)
+        scaled_prof = scale_profile_to_lumens(base_prof, float(target_lumens)) if target_lumens else base_prof
         prof = apply_variant_dimensions(scaled_prof, s.length, s.width, s.height)
         profiles[s.id] = prof
+        if s.variant_id:
+            profiles[s.variant_id] = prof
 
 
 @router.post(

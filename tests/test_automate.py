@@ -760,3 +760,32 @@ def test_resolve_rotations_and_stage_b():
     assert _resolve_stage_b(req_b, 6000.0) == 6
 
 
+def test_automate_excludes_fixtures_outside_room_boundaries():
+    from app.automate.layouts import LayoutSpec, placements_for_layout
+    from app.domain.models import IESProfile
+    from app.services.vector_math import is_fixture_inside_room
+    from tests.ies_sample import ies_with
+
+    poly = [(0.0, 0.0), (6.0, 0.0), (6.0, 6.0), (0.0, 6.0)]
+    # Fixture with 1.2m length and 0.6m width
+    prof = load_ies(ies_with(lumens=2000.0, length=1.2, width=0.6))
+    assert prof.length == 1.2 and prof.width == 0.6
+
+    # Layout spec with ox=0.4m: x-positions will include x=0.4m.
+    # At x=0.4m, rot=0.0: half-length=0.6m extends to 0.4 - 0.6 = -0.2m (OUTSIDE room boundary!)
+    spec = LayoutSpec(sx=2.0, sy=2.0, ox=0.4, oy=2.0, rotation=0.0)
+
+    # 1. Unvalidated placements (0x0) would have included the x=0.4 fixture
+    unvalidated = placements_for_layout(poly, spec, length=0.0, width=0.0)
+    assert any(p.x == pytest.approx(0.4) for p in unvalidated)
+
+    # 2. Validated placements with fixture dimensions must exclude x=0.4
+    validated = placements_for_layout(poly, spec, length=prof.length, width=prof.width)
+    assert not any(p.x == pytest.approx(0.4) for p in validated)
+    assert len(validated) < len(unvalidated)
+    # Every validated placement must be strictly inside the room
+    for p in validated:
+        assert is_fixture_inside_room((p.x, p.y), prof.length, prof.width, p.rotation, poly) is True
+
+
+

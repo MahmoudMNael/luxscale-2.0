@@ -87,6 +87,39 @@ def point_in_polygon(point: Vec2, polygon: list[Vec2]) -> bool:
     return bool(_room(polygon).covers(Point(point)))
 
 
+def is_fixture_inside_room(
+    center: Vec2,
+    length: float,
+    width: float,
+    rotation_deg: float,
+    polygon: list[Vec2] | Polygon,
+    tol: float = 1e-6,
+) -> bool:
+    """True when the entire fixture body (all rotated corners and area) is inside the room."""
+    room_poly = polygon if isinstance(polygon, Polygon) else _room(polygon)
+    if room_poly.is_empty:
+        return False
+    target_poly = room_poly.buffer(tol, join_style=2, mitre_limit=5.0) if tol > 0 else room_poly
+    if length <= EPS and width <= EPS:
+        return bool(target_poly.covers(Point(center)))
+
+    hl = max(length, 0.0) / 2.0
+    hw = max(width, 0.0) / 2.0
+    rad = math.radians(rotation_deg)
+    cos_a = 0.0 if abs(math.cos(rad)) < 1e-12 else math.cos(rad)
+    sin_a = 0.0 if abs(math.sin(rad)) < 1e-12 else math.sin(rad)
+    cx, cy = center
+    corners = [
+        (cx + hl * cos_a - hw * sin_a, cy + hl * sin_a + hw * cos_a),
+        (cx - hl * cos_a - hw * sin_a, cy - hl * sin_a + hw * cos_a),
+        (cx - hl * cos_a + hw * sin_a, cy - hl * sin_a - hw * cos_a),
+        (cx + hl * cos_a + hw * sin_a, cy + hl * sin_a - hw * cos_a),
+    ]
+    fix_poly = Polygon(corners)
+    return bool(target_poly.covers(fix_poly))
+
+
+
 def _ring(poly: Polygon) -> list[Vec2]:
     coords = [(float(x), float(y)) for x, y, *_ in poly.exterior.coords]
     if len(coords) > 1 and coords[0] == coords[-1]:
