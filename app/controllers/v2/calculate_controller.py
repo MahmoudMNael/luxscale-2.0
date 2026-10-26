@@ -11,10 +11,13 @@ Supports:
 
 from __future__ import annotations
 
+import logging
 import time
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
+
+logger = logging.getLogger(__name__)
 
 from app.domain.exceptions import AppError, GeometryError, NoFixturesError, ProviderError
 from app.domain.models import FixturePlacement, IESProfile
@@ -168,19 +171,37 @@ def calculate_v2(
     # 3b. External catalog variants (unconstrained: indoor/outdoor, main or non-main)
     variant_ids_needed: set[str] = set()
     for p in placements:
-        if p.variant_id:
-            variant_ids_needed.add(p.variant_id)
-        elif p.ies_ref and not p.ies_ref.endswith((".ies", ".ldt", ".txt")) and p.ies_ref not in profiles:
-            variant_ids_needed.add(p.ies_ref)
+        if p.variant_id and not str(p.variant_id).startswith(("custom-", "custom_")):
+            variant_ids_needed.add(str(p.variant_id))
+        elif (
+            p.ies_ref
+            and not p.ies_ref.endswith((".ies", ".ldt", ".txt"))
+            and p.ies_ref not in profiles
+            and not str(p.ies_ref).startswith(("custom-", "custom_"))
+        ):
+            variant_ids_needed.add(str(p.ies_ref))
 
     if variant_ids_needed:
+        specs_to_process: list[FixtureSpec] = []
         try:
-            specs = fixture_provider.get_variants(list(variant_ids_needed), main_only=False)
-            for s in specs:
+            specs_to_process = fixture_provider.get_variants(list(variant_ids_needed), main_only=False)
+        except Exception as exc:
+            logger.warning("Batch catalog variant lookup failed for %s (%s); attempting individual resolution", variant_ids_needed, exc)
+            for vid in list(variant_ids_needed):
+                try:
+                    single_specs = fixture_provider.get_variants([vid], main_only=False)
+                    specs_to_process.extend(single_specs)
+                except Exception as inner_exc:
+                    logger.warning("Could not resolve catalog variant '%s': %s", vid, inner_exc)
+
+        for s in specs_to_process:
+            try:
                 specs_by_id[s.id] = s
                 if s.variant_id:
                     specs_by_id[s.variant_id] = s
                 ies_text = (payload.assets or {}).get(s.id) or (payload.assets or {}).get(s.variant_id) or s.ies_text
+                if not ies_text:
+                    continue
                 base_prof = load_ies(ies_text)
                 target_lumens = s.lumens if s.lumens and s.lumens > 0 else (s.power * s.efficacy if s.power and s.efficacy else None)
                 scaled_prof = scale_profile_to_lumens(base_prof, float(target_lumens)) if target_lumens else base_prof
@@ -188,8 +209,8 @@ def calculate_v2(
                 profiles[s.id] = prof
                 if s.variant_id:
                     profiles[s.variant_id] = prof
-        except Exception as exc:
-            logger.warning("Could not resolve or scale catalog variants %s: %s", variant_ids_needed, exc)
+            except Exception as proc_exc:
+                logger.warning("Could not process or scale spec for variant '%s': %s", s.id, proc_exc)
 
     # Ensure a default profile exists if needed
     if "default" not in profiles:

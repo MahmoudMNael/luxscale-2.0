@@ -297,3 +297,71 @@ def test_v2_calculate_scales_ies_to_target_lumens_and_handles_assets():
     finally:
         app.dependency_overrides.clear()
 
+
+def test_v2_calculate_with_grid_pattern_and_custom_uploaded_ies_fixture():
+    from app.controllers.v2.calculate_controller import _get_fixture_provider
+    from app.providers import FixtureSpec, InMemoryFixtureProvider
+    from tests.ies_sample import ies_with
+
+    catalog_ies = ies_with(lumens=2000.0, length=0.6, width=0.6, height=0.08)
+    custom_ies = ies_with(lumens=1500.0, length=0.4, width=0.4, height=0.05)
+
+    catalog_spec = FixtureSpec(
+        id="var-catalog-grid",
+        fixture_id="fix-grid",
+        variant_id="var-catalog-grid",
+        ies_text=catalog_ies,
+        wattage=25.0,
+        lumens=2000.0,
+        power=25.0,
+        efficacy=80.0,
+        length=0.6,
+        width=0.6,
+        height=0.08,
+        is_main_solution=True,
+    )
+    fix_prov = InMemoryFixtureProvider({catalog_spec.id: catalog_spec})
+    app.dependency_overrides[_get_fixture_provider] = lambda: fix_prov
+
+    try:
+        req = {
+            "polygon": [{"x": 0.0, "y": 0.0}, {"x": 6.0, "y": 0.0}, {"x": 6.0, "y": 4.0}, {"x": 0.0, "y": 4.0}],
+            "ceilingHeight": 3.0,
+            "mountingHeight": 2.8,
+            "patterns": [
+                {
+                    "id": "GRID_01",
+                    "name": "Grid Array",
+                    "type": "grid",
+                    "variantId": "var-catalog-grid",
+                    "gridType": "count",
+                    "countX": 2,
+                    "countY": 2,
+                    "mountHeight": 2.8,
+                }
+            ],
+            "fixtures": [
+                {
+                    "id": "CUSTOM_F1",
+                    "x": 3.0,
+                    "y": 2.0,
+                    "z": 2.8,
+                    "variantId": "custom-ies-1793007463044-eleg",
+                    "iesRef": "custom-ies-1793007463044-eleg",
+                }
+            ],
+            "assets": {
+                "custom-ies-1793007463044-eleg": custom_ies,
+            },
+            "workplanes": [{"id": "WP-01", "height": 0.85, "margin": 0.5}],
+            "bounces": 0,
+        }
+        resp = client.post("/api/v2/calculate", json=req)
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert len(data["fixtures"]) == 5  # 4 from grid + 1 custom
+        assert data["workplaneResults"]["WP-01"]["evaluation"]["average"] > 0
+    finally:
+        app.dependency_overrides.clear()
+
+
