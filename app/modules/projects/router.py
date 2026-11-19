@@ -26,7 +26,7 @@ router = APIRouter(prefix="/api/v2/projects", tags=["V2 Projects"])
 )
 def list_projects(
     query: str | None = Query(default=None, description="Search term matching project name or scene name"),
-    sortBy: Literal["name", "createdAt", "updatedAt", "fixtureCount", "roomArea"] = Query(default="updatedAt", alias="sortBy"),
+    sortBy: Literal["name", "createdAt", "updatedAt", "roomCount"] = Query(default="updatedAt", alias="sortBy"),
     sortOrder: Literal["asc", "desc"] = Query(default="desc", alias="sortOrder"),
     page: int = Query(default=1, ge=1, description="Page number starting at 1"),
     limit: int = Query(default=20, ge=1, le=100, description="Items per page (max 100)"),

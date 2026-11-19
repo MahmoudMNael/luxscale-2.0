@@ -122,46 +122,9 @@ def test_project_ownership_save_and_copy(test_setup) -> None:
     headers_b = {"Authorization": f"Bearer {test_setup['token_b']}"}
 
     project_payload = {
-        "schemaVersion": 1,
         "name": "Headquarters Level 2",
         "sceneName": "Scene 01",
-        "room": {
-            "polygon": [
-                {"x": 0.0, "y": 0.0},
-                {"x": 8.0, "y": 0.0},
-                {"x": 8.0, "y": 6.0},
-                {"x": 0.0, "y": 6.0},
-            ],
-            "ceilingHeight": 3.0,
-            "wallThickness": 0.2,
-            "reflectances": {"ceiling": 0.7, "walls": 0.5, "floor": 0.2},
-            "obstructions": [],
-        },
-        "fixtures": [
-            {
-                "id": "#L-01",
-                "name": "Troffer 1",
-                "assetId": "asset-troffer-01",
-                "position": {"x": 2.0, "y": 2.0, "z": 2.8},
-                "rotation": 0.0,
-                "tiltAngle": 0.0,
-                "aimVector": {"x": 0.0, "y": 0.0, "z": -1.0},
-                "luminousFlux": 3600.0,
-                "wattage": 40.0,
-                "cct": 4000,
-                "fluxMultiplier": 1.0,
-            }
-        ],
-        "patterns": [],
-        "workplanes": [{"id": "WP-01", "name": "Task", "height": 0.85, "margin": 0.5}],
-        "physics": {"maintenanceFactor": 0.8, "radiosity": True},
-        "compliance": {
-            "standardId": "EN 12464-1 (OFFICE)",
-            "targetLux": 500.0,
-            "targetUniformity": 0.6,
-            "maxOverdesign": 0.3,
-        },
-        "assets": [],
+        "roomCount": 2,
         "thumbnailObjectKey": "thumbnails/shared/thumb1.png",
     }
 
@@ -172,6 +135,7 @@ def test_project_ownership_save_and_copy(test_setup) -> None:
     proj_id = created["id"]
     assert proj_id.startswith("proj_")
     assert created["name"] == "Headquarters Level 2"
+    assert created["roomCount"] == 2
     assert created["ownerId"] == str(test_setup["user_a"].id)
     assert created["thumbnailUrl"] is not None
     assert created["archiveDownloadUrl"] is not None
@@ -247,58 +211,20 @@ def test_project_listing_search_sort_and_pagination(test_setup) -> None:
     client = TestClient(app)
     headers = {"Authorization": f"Bearer {test_setup['token_a']}"}
 
-    def _create_sample(name: str, scene: str, fixture_count: int, room_w: float, room_h: float):
+    def _create_sample(name: str, scene: str, room_count: int):
         payload = {
-            "schemaVersion": 1,
             "name": name,
             "sceneName": scene,
-            "room": {
-                "polygon": [
-                    {"x": 0.0, "y": 0.0},
-                    {"x": room_w, "y": 0.0},
-                    {"x": room_w, "y": room_h},
-                    {"x": 0.0, "y": room_h},
-                ],
-                "ceilingHeight": 3.0,
-                "wallThickness": 0.2,
-                "reflectances": {"ceiling": 0.7, "walls": 0.5, "floor": 0.2},
-                "obstructions": [],
-            },
-            "fixtures": [
-                {
-                    "id": f"#L-{i}",
-                    "name": f"Troffer {i}",
-                    "assetId": "asset-troffer-01",
-                    "position": {"x": 1.0, "y": 1.0, "z": 2.8},
-                    "rotation": 0.0,
-                    "tiltAngle": 0.0,
-                    "aimVector": {"x": 0.0, "y": 0.0, "z": -1.0},
-                    "luminousFlux": 3600.0,
-                    "wattage": 40.0,
-                    "cct": 4000,
-                    "fluxMultiplier": 1.0,
-                }
-                for i in range(fixture_count)
-            ],
-            "patterns": [],
-            "workplanes": [{"id": "WP-01", "name": "Task", "height": 0.85, "margin": 0.5}],
-            "physics": {"maintenanceFactor": 0.8, "radiosity": True},
-            "compliance": {
-                "standardId": "EN 12464-1 (OFFICE)",
-                "targetLux": 500.0,
-                "targetUniformity": 0.6,
-                "maxOverdesign": 0.3,
-            },
-            "assets": [],
+            "roomCount": room_count,
         }
         res = client.post("/api/v2/projects", json=payload, headers=headers)
         assert res.status_code == 201
         return res.json()
 
     # Create 3 distinct projects for testing filters, sorting, pagination
-    p_alpha = _create_sample(name="Alpha Warehouse", scene="Warehouse Ground", fixture_count=10, room_w=20.0, room_h=10.0)  # Area 200, 10 fixtures
-    p_beta = _create_sample(name="Beta Office", scene="Office Floor 1", fixture_count=2, room_w=5.0, room_h=4.0)          # Area 20, 2 fixtures
-    p_gamma = _create_sample(name="Gamma Clinic", scene="Reception", fixture_count=5, room_w=10.0, room_h=5.0)            # Area 50, 5 fixtures
+    p_alpha = _create_sample(name="Alpha Warehouse", scene="Warehouse Ground", room_count=10)
+    p_beta = _create_sample(name="Beta Office", scene="Office Floor 1", room_count=2)
+    p_gamma = _create_sample(name="Gamma Clinic", scene="Reception", room_count=5)
 
     # 1. Search Query on Name
     res_q1 = client.get("/api/v2/projects?query=Warehouse", headers=headers)
@@ -332,25 +258,19 @@ def test_project_listing_search_sort_and_pagination(test_setup) -> None:
     names_desc = [item["name"] for item in res_s_desc.json()["items"]]
     assert names_desc == ["Gamma Clinic", "Beta Office", "Alpha Warehouse"]
 
-    # 6. Sorting by fixtureCount asc
-    res_fc_asc = client.get("/api/v2/projects?sortBy=fixtureCount&sortOrder=asc", headers=headers)
-    assert res_fc_asc.status_code == 200
-    fc_items = [item["name"] for item in res_fc_asc.json()["items"]]
-    assert fc_items == ["Beta Office", "Gamma Clinic", "Alpha Warehouse"]  # 2, 5, 10 fixtures
+    # 6. Sorting by roomCount asc
+    res_rc_asc = client.get("/api/v2/projects?sortBy=roomCount&sortOrder=asc", headers=headers)
+    assert res_rc_asc.status_code == 200
+    rc_items = [item["name"] for item in res_rc_asc.json()["items"]]
+    assert rc_items == ["Beta Office", "Gamma Clinic", "Alpha Warehouse"]  # 2, 5, 10 rooms
 
-    # 7. Sorting by fixtureCount desc
-    res_fc_desc = client.get("/api/v2/projects?sortBy=fixtureCount&sortOrder=desc", headers=headers)
-    assert res_fc_desc.status_code == 200
-    fc_desc_items = [item["name"] for item in res_fc_desc.json()["items"]]
-    assert fc_desc_items == ["Alpha Warehouse", "Gamma Clinic", "Beta Office"]
+    # 7. Sorting by roomCount desc
+    res_rc_desc = client.get("/api/v2/projects?sortBy=roomCount&sortOrder=desc", headers=headers)
+    assert res_rc_desc.status_code == 200
+    rc_desc_items = [item["name"] for item in res_rc_desc.json()["items"]]
+    assert rc_desc_items == ["Alpha Warehouse", "Gamma Clinic", "Beta Office"]
 
-    # 8. Sorting by roomArea desc
-    res_ra_desc = client.get("/api/v2/projects?sortBy=roomArea&sortOrder=desc", headers=headers)
-    assert res_ra_desc.status_code == 200
-    ra_desc_items = [item["name"] for item in res_ra_desc.json()["items"]]
-    assert ra_desc_items == ["Alpha Warehouse", "Gamma Clinic", "Beta Office"]  # 200, 50, 20
-
-    # 9. Pagination: limit 2, page 1
+    # 8. Pagination: limit 2, page 1
     res_p1 = client.get("/api/v2/projects?page=1&limit=2&sortBy=name&sortOrder=asc", headers=headers)
     assert res_p1.status_code == 200
     p1_data = res_p1.json()
@@ -362,7 +282,7 @@ def test_project_listing_search_sort_and_pagination(test_setup) -> None:
     assert p1_data["items"][0]["name"] == "Alpha Warehouse"
     assert p1_data["items"][1]["name"] == "Beta Office"
 
-    # 10. Pagination: limit 2, page 2
+    # 9. Pagination: limit 2, page 2
     res_p2 = client.get("/api/v2/projects?page=2&limit=2&sortBy=name&sortOrder=asc", headers=headers)
     assert res_p2.status_code == 200
     p2_data = res_p2.json()

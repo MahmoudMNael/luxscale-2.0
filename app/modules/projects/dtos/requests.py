@@ -1,36 +1,31 @@
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
-
-from app.modules.projects.schemas import (
-    ComplianceCriteriaDto,
-    FixtureInstanceDto,
-    PhotometricAssetMetaDto,
-    PhysicsSettingsDto,
-    RoomGeometryDto,
-    WorkplaneDto,
-)
 
 
 class SaveProjectRequestDto(BaseModel):
-    model_config = ConfigDict(populate_by_name=True, serialize_by_alias=True)
+    model_config = ConfigDict(populate_by_name=True, serialize_by_alias=True, extra="allow")
 
-    schemaVersion: Literal[1] = 1
-    id: str | None = Field(default=None, description="Optional project ID. If omitted or not found, a new project is created; if found and owned, it is updated.")
-    name: str
-    sceneName: str = "Scene 01"
-    createdAt: str | None = None
-    updatedAt: str | None = None
-    room: RoomGeometryDto
-    fixtures: list[FixtureInstanceDto] = Field(default_factory=list)
-    patterns: list[dict[str, Any]] = Field(default_factory=list)
-    workplanes: list[WorkplaneDto] = Field(default_factory=list)
-    physics: PhysicsSettingsDto = Field(default_factory=PhysicsSettingsDto)
-    compliance: ComplianceCriteriaDto = Field(default_factory=ComplianceCriteriaDto)
-    assets: list[PhotometricAssetMetaDto] = Field(default_factory=list)
-    results: dict[str, Any] | None = None
-    thumbnailObjectKey: str | None = Field(default=None, alias="thumbnailObjectKey")
+    id: str | None = Field(
+        default=None,
+        description="Optional project ID. If omitted, created; if provided and owned, updated.",
+    )
+    name: str = Field(description="Project name")
+    sceneName: str = Field(default="Scene 01", alias="sceneName", description="Primary scene or active room name")
+    roomCount: int = Field(default=1, ge=1, alias="roomCount", description="Number of rooms in project")
+    schemaVersion: int = Field(default=2, alias="schemaVersion", description="Project schema version")
+    archiveObjectKey: str | None = Field(
+        default=None,
+        alias="archiveObjectKey",
+        description="Object storage key for the packaged .lxsc file",
+    )
+    thumbnailObjectKey: str | None = Field(
+        default=None,
+        alias="thumbnailObjectKey",
+        description="Object storage key for project preview thumbnail",
+    )
+    metadata: dict[str, Any] = Field(default_factory=dict, description="Optional extra client metadata")
 
 
 class CopyProjectRequestDto(BaseModel):

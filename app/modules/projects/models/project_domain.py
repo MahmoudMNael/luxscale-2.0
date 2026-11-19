@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
@@ -11,13 +11,13 @@ class ProjectSummary:
     id: str
     name: str
     scene_name: str
+    room_count: int
     schema_version: int
     created_at: str
     updated_at: str
-    fixture_count: int
-    room_area: float
     owner_id: str | None = None
     thumbnail_url: str | None = None
+    archive_download_url: str | None = None
 
 
 @dataclass(frozen=True)
@@ -25,95 +25,48 @@ class ProjectDomainModel:
     id: str
     name: str
     scene_name: str
+    room_count: int
     schema_version: int
     created_at: str
     updated_at: str
-    room_data: dict[str, Any]
-    fixtures_data: list[dict[str, Any]]
-    patterns_data: list[dict[str, Any]]
-    workplanes_data: list[dict[str, Any]]
-    physics_data: dict[str, Any]
-    compliance_data: dict[str, Any]
-    assets_data: list[dict[str, Any]]
-    results_data: dict[str, Any] | None = None
     user_id: uuid.UUID | None = None
     thumbnail_object_key: str | None = None
     archive_object_key: str | None = None
-    file_path: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_dict(
         cls,
         data: dict[str, Any],
-        file_path: str | None = None,
         user_id: uuid.UUID | None = None,
         thumbnail_object_key: str | None = None,
         archive_object_key: str | None = None,
     ) -> ProjectDomainModel:
         now_iso = datetime.now(timezone.utc).isoformat()
         return cls(
-            id=data.get("id") or str(uuid.uuid4()),
+            id=data.get("id") or f"proj_{uuid.uuid4().hex[:12]}",
             name=data.get("name", "Untitled Project"),
-            scene_name=data.get("sceneName", "Scene 01"),
-            schema_version=data.get("schemaVersion", 1),
-            created_at=data.get("createdAt", now_iso),
-            updated_at=data.get("updatedAt", now_iso),
-            room_data=data.get("room", {}),
-            fixtures_data=data.get("fixtures", []),
-            patterns_data=data.get("patterns", []),
-            workplanes_data=data.get("workplanes", []),
-            physics_data=data.get("physics", {}),
-            compliance_data=data.get("compliance", {}),
-            assets_data=data.get("assets", []),
-            results_data=data.get("results"),
+            scene_name=data.get("sceneName", data.get("scene_name", "Scene 01")),
+            room_count=int(data.get("roomCount", data.get("room_count", 1))),
+            schema_version=int(data.get("schemaVersion", data.get("schema_version", 2))),
+            created_at=data.get("createdAt", data.get("created_at", now_iso)),
+            updated_at=data.get("updatedAt", data.get("updated_at", now_iso)),
             user_id=user_id,
             thumbnail_object_key=thumbnail_object_key or data.get("thumbnailObjectKey"),
             archive_object_key=archive_object_key or data.get("archiveObjectKey"),
-            file_path=file_path,
+            metadata=data.get("metadata", {}),
         )
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "schemaVersion": self.schema_version,
             "id": self.id,
             "name": self.name,
             "sceneName": self.scene_name,
+            "roomCount": self.room_count,
+            "schemaVersion": self.schema_version,
             "createdAt": self.created_at,
             "updatedAt": self.updated_at,
-            "room": self.room_data,
-            "fixtures": self.fixtures_data,
-            "patterns": self.patterns_data,
-            "workplanes": self.workplanes_data,
-            "physics": self.physics_data,
-            "compliance": self.compliance_data,
-            "assets": self.assets_data,
-            "results": self.results_data,
             "thumbnailObjectKey": self.thumbnail_object_key,
             "archiveObjectKey": self.archive_object_key,
+            "metadata": self.metadata,
         }
-
-    def compute_room_area(self) -> float:
-        poly = self.room_data.get("polygon", [])
-        if len(poly) < 3:
-            return 0.0
-        area = 0.0
-        for i in range(len(poly)):
-            j = (i + 1) % len(poly)
-            p1 = poly[i]
-            p2 = poly[j]
-            area += p1["x"] * p2["y"] - p2["x"] * p1["y"]
-        return round(abs(area) * 0.5, 2)
-
-    def to_summary(self, thumbnail_url: str | None = None) -> ProjectSummary:
-        return ProjectSummary(
-            id=self.id,
-            name=self.name,
-            scene_name=self.scene_name,
-            schema_version=self.schema_version,
-            created_at=self.created_at,
-            updated_at=self.updated_at,
-            fixture_count=len(self.fixtures_data),
-            room_area=self.compute_room_area(),
-            owner_id=str(self.user_id) if self.user_id else None,
-            thumbnail_url=thumbnail_url,
-        )

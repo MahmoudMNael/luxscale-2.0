@@ -10,18 +10,6 @@ from app.core.db.session import get_db
 from app.modules.projects.entities.project_entity import ProjectEntity
 
 
-def _compute_room_area(meta: dict) -> float:
-    room = meta.get("room", {}) if isinstance(meta, dict) else {}
-    poly = room.get("polygon", [])
-    if len(poly) < 3:
-        return 0.0
-    area = 0.0
-    for i in range(len(poly)):
-        j = (i + 1) % len(poly)
-        area += poly[i]["x"] * poly[j]["y"] - poly[j]["x"] * poly[i]["y"]
-    return round(abs(area) * 0.5, 2)
-
-
 class ProjectRepository:
     def __init__(self, db: Session) -> None:
         self.db = db
@@ -72,39 +60,18 @@ class ProjectRepository:
         is_desc = sort_order.lower() == "desc"
         clean_sort = sort_by.strip()
 
-        # Direct SQL column sorting
+        # Pure SQL column sorting
         if clean_sort == "name":
             col = ProjectEntity.name
-            stmt = stmt.order_by(col.desc() if is_desc else col.asc()).limit(limit).offset(offset)
-            return self.db.scalars(stmt).all()
         elif clean_sort in ("createdAt", "created_at"):
             col = ProjectEntity.created_at
-            stmt = stmt.order_by(col.desc() if is_desc else col.asc()).limit(limit).offset(offset)
-            return self.db.scalars(stmt).all()
-        elif clean_sort in ("updatedAt", "updated_at"):
-            col = ProjectEntity.updated_at
-            stmt = stmt.order_by(col.desc() if is_desc else col.asc()).limit(limit).offset(offset)
-            return self.db.scalars(stmt).all()
-        elif clean_sort in ("fixtureCount", "fixture_count"):
-            # Computed metadata sorting
-            rows = list(self.db.scalars(stmt).all())
-            rows.sort(
-                key=lambda e: len(e.metadata_json.get("fixtures", [])) if isinstance(e.metadata_json, dict) else 0,
-                reverse=is_desc,
-            )
-            return rows[offset : offset + limit]
-        elif clean_sort in ("roomArea", "room_area"):
-            # Computed room area sorting
-            rows = list(self.db.scalars(stmt).all())
-            rows.sort(
-                key=lambda e: _compute_room_area(e.metadata_json),
-                reverse=is_desc,
-            )
-            return rows[offset : offset + limit]
+        elif clean_sort in ("roomCount", "room_count"):
+            col = ProjectEntity.room_count
         else:
-            # Fallback to updated_at desc
-            stmt = stmt.order_by(ProjectEntity.updated_at.desc()).limit(limit).offset(offset)
-            return self.db.scalars(stmt).all()
+            col = ProjectEntity.updated_at
+
+        stmt = stmt.order_by(col.desc() if is_desc else col.asc()).limit(limit).offset(offset)
+        return self.db.scalars(stmt).all()
 
     def delete(self, project_id: str, user_id: uuid.UUID) -> bool:
         entity = self.get_by_id_and_user(project_id, user_id)
