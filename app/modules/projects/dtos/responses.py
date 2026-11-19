@@ -49,3 +49,14 @@ class ProjectListItemDto(BaseModel):
     roomArea: float = Field(default=0.0, alias="roomArea")
     thumbnailUrl: str | None = Field(default=None, alias="thumbnailUrl")
     ownerId: str = Field(alias="ownerId")
+
+
+class ProjectPageResponseDto(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, serialize_by_alias=True)
+
+    items: list[ProjectListItemDto]
+    total: int
+    page: int
+    limit: int
+    totalPages: int = Field(alias="totalPages")
+

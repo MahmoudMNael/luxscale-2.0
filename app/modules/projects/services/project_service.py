@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import math
 import uuid
 import zipfile
 from datetime import datetime, timezone
@@ -12,7 +13,11 @@ from app.core.storage.providers.local_provider import LocalStorageProvider
 from app.core.storage.providers.s3_provider import S3StorageProvider
 from app.core.storage.services.storage_service import StorageService, get_storage_service
 from app.modules.projects.dtos.requests import SaveProjectRequestDto
-from app.modules.projects.dtos.responses import ProjectDetailResponseDto, ProjectListItemDto
+from app.modules.projects.dtos.responses import (
+    ProjectDetailResponseDto,
+    ProjectListItemDto,
+    ProjectPageResponseDto,
+)
 from app.modules.projects.entities.project_entity import ProjectEntity
 from app.modules.projects.models.project_domain import ProjectDomainModel
 from app.modules.projects.repositories.project_repository import ProjectRepository, get_project_repository
@@ -231,8 +236,26 @@ class ProjectService:
             )
         return self._to_detail_dto(entity)
 
-    def list_projects(self, user_id: uuid.UUID) -> list[ProjectListItemDto]:
-        entities = self.repo.list_by_user(user_id)
+    def list_projects(
+        self,
+        user_id: uuid.UUID,
+        query: str | None = None,
+        sort_by: str = "updatedAt",
+        sort_order: str = "desc",
+        page: int = 1,
+        limit: int = 20,
+    ) -> ProjectPageResponseDto:
+        offset = max(0, (page - 1) * limit)
+        total = self.repo.count_by_user(user_id, query=query)
+        entities = self.repo.list_by_user(
+            user_id,
+            query=query,
+            sort_by=sort_by,
+            sort_order=sort_order,
+            limit=limit,
+            offset=offset,
+        )
+        total_pages = math.ceil(total / limit) if total > 0 else 0
         items: list[ProjectListItemDto] = []
         for e in entities:
             domain = ProjectDomainModel.from_dict(e.metadata_json, user_id=e.user_id)
@@ -253,7 +276,13 @@ class ProjectService:
                     ownerId=str(e.user_id),
                 )
             )
-        return items
+        return ProjectPageResponseDto(
+            items=items,
+            total=total,
+            page=page,
+            limit=limit,
+            totalPages=total_pages,
+        )
 
     def export_lxsc(self, project_id: str, user_id: uuid.UUID) -> tuple[str, bytes]:
         entity = self.repo.get_by_id(project_id)

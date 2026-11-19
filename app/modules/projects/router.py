@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import io
-from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile, status
+from typing import Literal
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
 from fastapi.responses import StreamingResponse
 
 from app.modules.auth.dependencies import get_current_user
 from app.modules.projects.dtos.requests import CopyProjectRequestDto, SaveProjectRequestDto
-from app.modules.projects.dtos.responses import ProjectDetailResponseDto, ProjectListItemDto
+from app.modules.projects.dtos.responses import (
+    ProjectDetailResponseDto,
+    ProjectListItemDto,
+    ProjectPageResponseDto,
+)
 from app.modules.projects.services.project_service import ProjectService, get_project_service
 from app.modules.users.entities.user_entity import UserEntity
 
@@ -15,15 +20,27 @@ router = APIRouter(prefix="/api/v2/projects", tags=["V2 Projects"])
 
 @router.get(
     "",
-    response_model=list[ProjectListItemDto],
-    summary="List all projects owned by caller",
-    description="Returns a summarized list of all stored projects owned by the authenticated user.",
+    response_model=ProjectPageResponseDto,
+    summary="List all projects owned by caller with filtering and sorting",
+    description="Returns a paginated list of all stored projects owned by the authenticated user with search and sorting support.",
 )
 def list_projects(
+    query: str | None = Query(default=None, description="Search term matching project name or scene name"),
+    sortBy: Literal["name", "createdAt", "updatedAt", "fixtureCount", "roomArea"] = Query(default="updatedAt", alias="sortBy"),
+    sortOrder: Literal["asc", "desc"] = Query(default="desc", alias="sortOrder"),
+    page: int = Query(default=1, ge=1, description="Page number starting at 1"),
+    limit: int = Query(default=20, ge=1, le=100, description="Items per page (max 100)"),
     current_user: UserEntity = Depends(get_current_user),
     service: ProjectService = Depends(get_project_service),
-) -> list[ProjectListItemDto]:
-    return service.list_projects(current_user.id)
+) -> ProjectPageResponseDto:
+    return service.list_projects(
+        user_id=current_user.id,
+        query=query,
+        sort_by=sortBy,
+        sort_order=sortOrder,
+        page=page,
+        limit=limit,
+    )
 
 
 @router.post(
