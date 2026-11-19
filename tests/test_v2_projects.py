@@ -122,46 +122,9 @@ def test_project_ownership_save_and_copy(test_setup) -> None:
     headers_b = {"Authorization": f"Bearer {test_setup['token_b']}"}
 
     project_payload = {
-        "schemaVersion": 1,
         "name": "Headquarters Level 2",
         "sceneName": "Scene 01",
-        "room": {
-            "polygon": [
-                {"x": 0.0, "y": 0.0},
-                {"x": 8.0, "y": 0.0},
-                {"x": 8.0, "y": 6.0},
-                {"x": 0.0, "y": 6.0},
-            ],
-            "ceilingHeight": 3.0,
-            "wallThickness": 0.2,
-            "reflectances": {"ceiling": 0.7, "walls": 0.5, "floor": 0.2},
-            "obstructions": [],
-        },
-        "fixtures": [
-            {
-                "id": "#L-01",
-                "name": "Troffer 1",
-                "assetId": "asset-troffer-01",
-                "position": {"x": 2.0, "y": 2.0, "z": 2.8},
-                "rotation": 0.0,
-                "tiltAngle": 0.0,
-                "aimVector": {"x": 0.0, "y": 0.0, "z": -1.0},
-                "luminousFlux": 3600.0,
-                "wattage": 40.0,
-                "cct": 4000,
-                "fluxMultiplier": 1.0,
-            }
-        ],
-        "patterns": [],
-        "workplanes": [{"id": "WP-01", "name": "Task", "height": 0.85, "margin": 0.5}],
-        "physics": {"maintenanceFactor": 0.8, "radiosity": True},
-        "compliance": {
-            "standardId": "EN 12464-1 (OFFICE)",
-            "targetLux": 500.0,
-            "targetUniformity": 0.6,
-            "maxOverdesign": 0.3,
-        },
-        "assets": [],
+        "roomCount": 2,
         "thumbnailObjectKey": "thumbnails/shared/thumb1.png",
     }
 
@@ -172,6 +135,7 @@ def test_project_ownership_save_and_copy(test_setup) -> None:
     proj_id = created["id"]
     assert proj_id.startswith("proj_")
     assert created["name"] == "Headquarters Level 2"
+    assert created["roomCount"] == 2
     assert created["ownerId"] == str(test_setup["user_a"].id)
     assert created["thumbnailUrl"] is not None
     assert created["archiveDownloadUrl"] is not None
@@ -216,13 +180,16 @@ def test_project_ownership_save_and_copy(test_setup) -> None:
     # 8. List projects returns only caller's projects
     list_a = client.get("/api/v2/projects", headers=headers_a)
     assert list_a.status_code == 200
-    items_a = list_a.json()
-    assert len(items_a) == 3  # original + 2 copies
-    assert all(item["ownerId"] == str(test_setup["user_a"].id) for item in items_a)
+    page_a = list_a.json()
+    assert page_a["total"] == 3  # original + 2 copies
+    assert len(page_a["items"]) == 3
+    assert all(item["ownerId"] == str(test_setup["user_a"].id) for item in page_a["items"])
 
     list_b = client.get("/api/v2/projects", headers=headers_b)
     assert list_b.status_code == 200
-    assert len(list_b.json()) == 0
+    page_b = list_b.json()
+    assert page_b["total"] == 0
+    assert len(page_b["items"]) == 0
 
     # 9. Export .lxsc
     res_export = client.get(f"/api/v2/projects/{proj_id}/export", headers=headers_a)
@@ -238,3 +205,91 @@ def test_project_ownership_save_and_copy(test_setup) -> None:
     # 11. Verify 404 after delete
     res_get_del = client.get(f"/api/v2/projects/{proj_id}", headers=headers_a)
     assert res_get_del.status_code == 404
+
+
+def test_project_listing_search_sort_and_pagination(test_setup) -> None:
+    client = TestClient(app)
+    headers = {"Authorization": f"Bearer {test_setup['token_a']}"}
+
+    def _create_sample(name: str, scene: str, room_count: int):
+        payload = {
+            "name": name,
+            "sceneName": scene,
+            "roomCount": room_count,
+        }
+        res = client.post("/api/v2/projects", json=payload, headers=headers)
+        assert res.status_code == 201
+        return res.json()
+
+    # Create 3 distinct projects for testing filters, sorting, pagination
+    p_alpha = _create_sample(name="Alpha Warehouse", scene="Warehouse Ground", room_count=10)
+    p_beta = _create_sample(name="Beta Office", scene="Office Floor 1", room_count=2)
+    p_gamma = _create_sample(name="Gamma Clinic", scene="Reception", room_count=5)
+
+    # 1. Search Query on Name
+    res_q1 = client.get("/api/v2/projects?query=Warehouse", headers=headers)
+    assert res_q1.status_code == 200
+    d_q1 = res_q1.json()
+    assert d_q1["total"] == 1
+    assert d_q1["items"][0]["name"] == "Alpha Warehouse"
+
+    # 2. Search Query on Scene Name
+    res_q2 = client.get("/api/v2/projects?query=Reception", headers=headers)
+    assert res_q2.status_code == 200
+    d_q2 = res_q2.json()
+    assert d_q2["total"] == 1
+    assert d_q2["items"][0]["name"] == "Gamma Clinic"
+
+    # 3. Non-matching query
+    res_q3 = client.get("/api/v2/projects?query=NonExistentTerm", headers=headers)
+    assert res_q3.status_code == 200
+    assert res_q3.json()["total"] == 0
+    assert len(res_q3.json()["items"]) == 0
+
+    # 4. Sorting by name asc
+    res_s_asc = client.get("/api/v2/projects?sortBy=name&sortOrder=asc", headers=headers)
+    assert res_s_asc.status_code == 200
+    names = [item["name"] for item in res_s_asc.json()["items"]]
+    assert names == ["Alpha Warehouse", "Beta Office", "Gamma Clinic"]
+
+    # 5. Sorting by name desc
+    res_s_desc = client.get("/api/v2/projects?sortBy=name&sortOrder=desc", headers=headers)
+    assert res_s_desc.status_code == 200
+    names_desc = [item["name"] for item in res_s_desc.json()["items"]]
+    assert names_desc == ["Gamma Clinic", "Beta Office", "Alpha Warehouse"]
+
+    # 6. Sorting by roomCount asc
+    res_rc_asc = client.get("/api/v2/projects?sortBy=roomCount&sortOrder=asc", headers=headers)
+    assert res_rc_asc.status_code == 200
+    rc_items = [item["name"] for item in res_rc_asc.json()["items"]]
+    assert rc_items == ["Beta Office", "Gamma Clinic", "Alpha Warehouse"]  # 2, 5, 10 rooms
+
+    # 7. Sorting by roomCount desc
+    res_rc_desc = client.get("/api/v2/projects?sortBy=roomCount&sortOrder=desc", headers=headers)
+    assert res_rc_desc.status_code == 200
+    rc_desc_items = [item["name"] for item in res_rc_desc.json()["items"]]
+    assert rc_desc_items == ["Alpha Warehouse", "Gamma Clinic", "Beta Office"]
+
+    # 8. Pagination: limit 2, page 1
+    res_p1 = client.get("/api/v2/projects?page=1&limit=2&sortBy=name&sortOrder=asc", headers=headers)
+    assert res_p1.status_code == 200
+    p1_data = res_p1.json()
+    assert p1_data["page"] == 1
+    assert p1_data["limit"] == 2
+    assert p1_data["total"] == 3
+    assert p1_data["totalPages"] == 2
+    assert len(p1_data["items"]) == 2
+    assert p1_data["items"][0]["name"] == "Alpha Warehouse"
+    assert p1_data["items"][1]["name"] == "Beta Office"
+
+    # 9. Pagination: limit 2, page 2
+    res_p2 = client.get("/api/v2/projects?page=2&limit=2&sortBy=name&sortOrder=asc", headers=headers)
+    assert res_p2.status_code == 200
+    p2_data = res_p2.json()
+    assert p2_data["page"] == 2
+    assert p2_data["limit"] == 2
+    assert p2_data["total"] == 3
+    assert p2_data["totalPages"] == 2
+    assert len(p2_data["items"]) == 1
+    assert p2_data["items"][0]["name"] == "Gamma Clinic"
+

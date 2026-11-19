@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from typing import Sequence
 from fastapi import Depends
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.db.session import get_db
@@ -31,12 +31,46 @@ class ProjectRepository:
         )
         return self.db.scalars(stmt).first()
 
-    def list_by_user(self, user_id: uuid.UUID) -> Sequence[ProjectEntity]:
-        stmt = (
-            select(ProjectEntity)
-            .where(ProjectEntity.user_id == user_id)
-            .order_by(ProjectEntity.updated_at.desc())
-        )
+    def count_by_user(
+        self,
+        user_id: uuid.UUID,
+        query: str | None = None,
+    ) -> int:
+        stmt = select(func.count()).select_from(ProjectEntity).where(ProjectEntity.user_id == user_id)
+        if query and query.strip():
+            term = f"%{query.strip()}%"
+            stmt = stmt.where(or_(ProjectEntity.name.ilike(term), ProjectEntity.scene_name.ilike(term)))
+        return self.db.scalar(stmt) or 0
+
+    def list_by_user(
+        self,
+        user_id: uuid.UUID,
+        query: str | None = None,
+        sort_by: str = "updatedAt",
+        sort_order: str = "desc",
+        limit: int = 20,
+        offset: int = 0,
+    ) -> Sequence[ProjectEntity]:
+        stmt = select(ProjectEntity).where(ProjectEntity.user_id == user_id)
+
+        if query and query.strip():
+            term = f"%{query.strip()}%"
+            stmt = stmt.where(or_(ProjectEntity.name.ilike(term), ProjectEntity.scene_name.ilike(term)))
+
+        is_desc = sort_order.lower() == "desc"
+        clean_sort = sort_by.strip()
+
+        # Pure SQL column sorting
+        if clean_sort == "name":
+            col = ProjectEntity.name
+        elif clean_sort in ("createdAt", "created_at"):
+            col = ProjectEntity.created_at
+        elif clean_sort in ("roomCount", "room_count"):
+            col = ProjectEntity.room_count
+        else:
+            col = ProjectEntity.updated_at
+
+        stmt = stmt.order_by(col.desc() if is_desc else col.asc()).limit(limit).offset(offset)
         return self.db.scalars(stmt).all()
 
     def delete(self, project_id: str, user_id: uuid.UUID) -> bool:
